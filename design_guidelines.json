@@ -1,0 +1,69 @@
+{
+  "theme": "Dark Theme with Glassmorphism",
+  "typography": {
+    "headings": "Poppins",
+    "body": "Nunito Sans",
+    "weights": "Poppins: 600, 700; Nunito Sans: 400, 500, 600",
+    "instructions": "Import both from Google Fonts and configure in tailwind.config.js as `font-poppins` and `font-nunito`. Apply `font-poppins` to H1-H6 and `font-nunito` to body text."
+  },
+  "colors": {
+    "background": "#0b0c10",
+    "surface_glass": "rgba(30, 41, 59, 0.3)",
+    "primary": "#8B5CF6",
+    "secondary": "#06B6D4",
+    "accent_glow": "#D946EF",
+    "text_primary": "#F8FAFC",
+    "text_secondary": "#94A3B8"
+  },
+  "visual_enhancers": {
+    "glassmorphism": "Apply `bg-white/5 backdrop-blur-xl border border-white/10` to cards, sidebars, and modals. Ensure content underneath is not completely transparent. Add a very subtle inner shadow if possible to give a premium crystal feel.",
+    "icons": "Use `lucide-react` icons. Keep stroke width slightly rounded and consistent to match the 'cute minimalistic' requirement. Do not use emoji icons.",
+    "radius": "Use `rounded-2xl` or `rounded-3xl` on major cards and `rounded-full` on buttons for a softer, 'cute' appearance."
+  },
+  "component_rules": {
+    "buttons": "Pill-shaped (`rounded-full`), vibrant solid colors (e.g., Violet) or glass with a bright border. Include hover scale (`hover:scale-105`) and active press (`active:scale-95`).",
+    "cards": "Soft glass cards (`bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl`). Do not use generic solid gray cards. If using Shadcn Card, override with glassmorphism utility classes.",
+    "inputs": "Glassmorphic inputs with `bg-white/5 border-white/10 focus:border-violet-500 focus:ring-1 focus:ring-violet-500 rounded-xl`.",
+    "dialogs": "Ensure modal backdrops have heavy blur (`backdrop-blur-md bg-black/40`) to focus attention on the glassmorphic dialog content."
+  },
+  "grids_and_layouts": {
+    "spacing": "Generous spacing. Use `gap-6`, `p-6` to `p-8` for dashboard widgets to let the glass breathe.",
+    "dashboard_layout": "Sidebar navigation (glassmorphic) on left, main content area on right with an abstract glowing background blob/orb behind the main layout to enhance the glass effect.",
+    "bento_grid": "Use bento grid for the study dashboard summary (e.g., Progress, Next Exam, Hours Studied)."
+  },
+  "motion": {
+    "transitions": "Use Framer Motion. Page transitions: subtle fade and slide up (`initial={{opacity:0, y:10}} animate={{opacity:1, y:0}}`).",
+    "hover_states": "Smooth transform and background shifts. Use specific transitions like `transition-transform transition-colors duration-300 ease-out`. DO NOT use `transition-all`."
+  },
+  "accessibility": {
+    "contrast": "Ensure text over glass has sufficient contrast (APCA standards). Use pure white text for primary info and soft gray for secondary.",
+    "motion": "Respect `prefers-reduced-motion`.",
+    "testing": "All interactive and key informational elements MUST include a `data-testid` attribute."
+  },
+  "media": {
+    "image_urls": [
+      {
+        "url": "https://images.unsplash.com/photo-1756118175438-4e732b6aa719?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2ODh8MHwxfHNlYXJjaHwxfHxjdXRlJTIwM2QlMjBjaGFyYWN0ZXIlMjBzdHVkeWluZ3xlbnwwfHx8fDE3ODYyMzYxMTh8MA&ixlib=rb-4.1.0&q=85",
+        "category": "Hero / Empty State",
+        "description": "Cute 3D character studying. Perfect for onboarding or when a course folder is empty."
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1724405143873-cdaa5cac918e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzd8MHwxfHNlYXJjaHwzfHxnbGFzc21vcnBoaXNtJTIwYWJzdHJhY3QlMjBiYWNrZ3JvdW5kfGVufDB8fHx8MTc4NjIzNjEwNHww&ixlib=rb-4.1.0&q=85",
+        "category": "Background Texture",
+        "description": "Abstract glassmorphic background layer to place under the app container (with low opacity) to make the glass UI pop."
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "1. Modify /app/frontend/index.html to import Poppins and Nunito Sans from Google Fonts.",
+    "2. Update tailwind.config.js to include font-poppins and font-nunito, add the custom colors, and set the dark mode explicitly.",
+    "3. Set up global CSS in index.css. Ensure body has the dark background color and the background texture image positioned fixed with low opacity behind everything.",
+    "4. Build the layout with a fixed glass sidebar and a scrollable main area. Ensure there are no completely transparent surfaces under text.",
+    "5. Use Framer Motion for mounting animations of the dashboard cards and lists.",
+    "6. Integrate Shadcn UI components but heavily customize them. Strip the default blocky/Vercel look and apply the `bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl` glass styling.",
+    "7. Build key views: Dashboard (Bento grid), Course Folder View, Document Preview/Chat (split screen), Quiz View.",
+    "8. Include `lucide-react` for all iconography, maintaining a minimalistic and cute vibe.",
+    "9. Use `sonner` for toast notifications."
+  ],
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": "You tend to converge toward generic, 'on distribution' outputs. In frontend design, this creates what users call the 'AI slop' aesthetic. Avoid this: make creative, distinctive frontends that surprise and delight. Dark colors look good when used independently without gradients. DO NOT use dark colors as gradients. Don't make generic centered layouts, simplistic gradients, and uniform styling. Create depth through layered design elements with z-index hierarchy. Use glass-morphism effects with backdrop filters (12-24px blur). You MUST NOT apply universal transition. Eg: `transition: all`. Always add transitions for specific interactive elements excluding transforms. You MUST NOT center align the app container. Always use modern button styles like pill-shaped, or sharp button with interaction animations. NEVER: use AI assistant Emoji characters like 🤖🧠💭💡🔮🎯 etc for icons. Every interaction needs micro-animations. Use 2-3x more spacing than feels comfortable. Prioritize using pre-existing components from src/components/ui. Use `sonner` for toasts. All interactive and key informational elements MUST include a `data-testid` attribute."
+}
