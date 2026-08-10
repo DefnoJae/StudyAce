@@ -38,12 +38,18 @@ app.add_middleware(
         "https://study-ace-khaki.vercel.app",
         "http://localhost:3000",
         "http://localhost:5173",
-        "*"
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173"
     ],
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+@app.options("/{full_path:path}")
+async def preflight_handler(full_path: str):
+    return Response(status_code=200)
 
 api_router = APIRouter(prefix="/api")
 
