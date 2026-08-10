@@ -6,11 +6,15 @@ import { motion } from "framer-motion";
 import { toast } from "sonner";
 import {
   BookOpen, FileText, Brain, Target, Plus, Loader2, TrendingUp,
-  CalendarClock, Sparkles, Folder, AlertCircle, X
+  CalendarClock, Sparkles, Folder, AlertCircle, X, MoreVertical,
+  Pencil, Trash2, Archive, ArchiveRestore
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger
+} from "@/components/ui/dropdown-menu";
 
 const COLORS = ["#8B5CF6", "#06B6D4", "#D946EF", "#F59E0B", "#22C55E", "#EF4444"];
 
@@ -21,6 +25,24 @@ export default function Dashboard() {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
+  const [view, setView] = useState("active");
+  const [editing, setEditing] = useState(null);
+
+  const archiveCourse = async (c) => {
+    try {
+      await api.patch(`/courses/${c.id}`, { archived: !c.archived });
+      toast.success(c.archived ? "Course unarchived" : "Course archived");
+      load();
+    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+  };
+  const deleteCourse = async (c) => {
+    if (!window.confirm(`Delete "${c.name}"? All its documents, quizzes and folders will be removed. This cannot be undone.`)) return;
+    try {
+      await api.delete(`/courses/${c.id}`);
+      toast.success("Course deleted");
+      load();
+    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+  };
 
   const load = async () => {
     try {
@@ -68,36 +90,25 @@ export default function Dashboard() {
       <div className="grid lg:grid-cols-3 gap-6">
         {/* Courses */}
         <div className="lg:col-span-2 space-y-4">
-          <h2 className="text-lg font-head font-semibold flex items-center gap-2"><BookOpen className="w-5 h-5 text-ace-violet" /> Your Courses</h2>
-          {courses.length === 0 ? (
-            <EmptyCourses onCreate={() => setOpen(true)} />
-          ) : (
-            <div className="grid sm:grid-cols-2 gap-4">
-              {courses.map((c, i) => (
-                <motion.button
-                  key={c.id}
-                  data-testid={`course-card-${c.id}`}
-                  onClick={() => navigate(`/courses/${c.id}`)}
-                  initial={{ opacity: 0, y: 12 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: i * 0.05 }}
-                  className="glass rounded-2xl p-5 text-left hover:scale-[1.02] transition-transform duration-300 group"
-                >
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="w-11 h-11 rounded-xl grid place-items-center" style={{ background: `${c.color}22`, border: `1px solid ${c.color}55` }}>
-                      <Folder className="w-5 h-5" style={{ color: c.color }} />
-                    </div>
-                  </div>
-                  <p className="font-head font-semibold text-lg truncate">{c.name}</p>
-                  <p className="text-sm text-white/40 truncate mt-0.5">{c.description || "No description"}</p>
-                  <div className="flex gap-4 mt-4 text-xs text-white/50">
-                    <span className="flex items-center gap-1"><FileText className="w-3.5 h-3.5" /> {c.doc_count} docs</span>
-                    <span className="flex items-center gap-1"><Brain className="w-3.5 h-3.5" /> {c.quiz_count} quizzes</span>
-                  </div>
-                </motion.button>
-              ))}
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <h2 className="text-lg font-head font-semibold flex items-center gap-2"><BookOpen className="w-5 h-5 text-ace-violet" /> Your Courses</h2>
+            <div className="flex items-center gap-1 glass rounded-full p-1">
+              <button onClick={() => setView("active")} data-testid="courses-active-tab" className={`px-4 py-1.5 rounded-full text-sm font-semibold transition-colors duration-300 ${view === "active" ? "bg-ace-violet text-white" : "text-white/50 hover:text-white"}`}>Active</button>
+              <button onClick={() => setView("archived")} data-testid="courses-archived-tab" className={`px-4 py-1.5 rounded-full text-sm font-semibold transition-colors duration-300 ${view === "archived" ? "bg-ace-violet text-white" : "text-white/50 hover:text-white"}`}>Archived ({courses.filter((c) => c.archived).length})</button>
             </div>
-          )}
+          </div>
+          {(() => {
+            const shown = courses.filter((c) => (view === "archived" ? c.archived : !c.archived));
+            if (courses.length === 0) return <EmptyCourses onCreate={() => setOpen(true)} />;
+            if (shown.length === 0) return <p className="text-center text-white/40 py-8">{view === "archived" ? "No archived courses." : "No active courses. Create one to get started!"}</p>;
+            return (
+              <div className="grid sm:grid-cols-2 gap-4">
+                {shown.map((c, i) => (
+                  <CourseCard key={c.id} c={c} i={i} navigate={navigate} onRename={() => setEditing(c)} onArchive={() => archiveCourse(c)} onDelete={() => deleteCourse(c)} />
+                ))}
+              </div>
+            );
+          })()}
         </div>
 
         {/* Side: upcoming + weak */}
@@ -131,6 +142,8 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      <EditCourseDialog course={editing} onClose={() => setEditing(null)} onSaved={load} />
     </div>
   );
 }
@@ -175,6 +188,92 @@ function EmptyCourses({ onCreate }) {
         <Plus className="w-4 h-4" /> Create Course
       </button>
     </div>
+  );
+}
+
+function CourseCard({ c, i, navigate, onRename, onArchive, onDelete }) {
+  const stop = (e) => { e.stopPropagation(); };
+  return (
+    <motion.div
+      data-testid={`course-card-${c.id}`}
+      onClick={() => navigate(`/courses/${c.id}`)}
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: i * 0.05 }}
+      className="glass rounded-2xl p-5 text-left hover:scale-[1.02] transition-transform duration-300 cursor-pointer relative"
+    >
+      <div className="flex items-center justify-between mb-4">
+        <div className="w-11 h-11 rounded-xl grid place-items-center" style={{ background: `${c.color}22`, border: `1px solid ${c.color}55` }}>
+          <Folder className="w-5 h-5" style={{ color: c.color }} />
+        </div>
+        <div onClick={stop}>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button data-testid={`course-menu-${c.id}`} className="w-8 h-8 rounded-full grid place-items-center text-white/40 hover:text-white hover:bg-white/10 transition-colors duration-300">
+                <MoreVertical className="w-4 h-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="glass-strong border-white/10 text-white">
+              <DropdownMenuItem data-testid={`course-rename-${c.id}`} onClick={onRename} className="cursor-pointer focus:bg-white/10 focus:text-white">
+                <Pencil className="w-4 h-4 mr-2" /> Rename
+              </DropdownMenuItem>
+              <DropdownMenuItem data-testid={`course-archive-${c.id}`} onClick={onArchive} className="cursor-pointer focus:bg-white/10 focus:text-white">
+                {c.archived ? <><ArchiveRestore className="w-4 h-4 mr-2" /> Unarchive</> : <><Archive className="w-4 h-4 mr-2" /> Archive</>}
+              </DropdownMenuItem>
+              <DropdownMenuItem data-testid={`course-delete-${c.id}`} onClick={onDelete} className="cursor-pointer text-red-400 focus:bg-red-500/15 focus:text-red-400">
+                <Trash2 className="w-4 h-4 mr-2" /> Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <p className="font-head font-semibold text-lg truncate">{c.name}</p>
+        {c.archived && <span className="text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full bg-white/10 text-white/50">Archived</span>}
+      </div>
+      <p className="text-sm text-white/40 truncate mt-0.5">{c.description || "No description"}</p>
+      <div className="flex gap-4 mt-4 text-xs text-white/50">
+        <span className="flex items-center gap-1"><FileText className="w-3.5 h-3.5" /> {c.doc_count} docs</span>
+        <span className="flex items-center gap-1"><Brain className="w-3.5 h-3.5" /> {c.quiz_count} quizzes</span>
+      </div>
+    </motion.div>
+  );
+}
+
+function EditCourseDialog({ course, onClose, onSaved }) {
+  const [name, setName] = useState("");
+  const [desc, setDesc] = useState("");
+  const [color, setColor] = useState(COLORS[0]);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { if (course) { setName(course.name); setDesc(course.description || ""); setColor(course.color || COLORS[0]); } }, [course]);
+  const save = async () => {
+    if (!name.trim()) return;
+    setSaving(true);
+    try {
+      await api.patch(`/courses/${course.id}`, { name, description: desc, color });
+      toast.success("Course updated!");
+      onClose(); onSaved();
+    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+    finally { setSaving(false); }
+  };
+  return (
+    <Dialog open={!!course} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="glass-strong border-white/10 text-white">
+        <DialogHeader><DialogTitle className="font-head">Rename course</DialogTitle></DialogHeader>
+        <div className="space-y-4 mt-2">
+          <input data-testid="edit-course-name-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Course name" className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-ace-violet outline-none" />
+          <textarea data-testid="edit-course-desc-input" value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Description (optional)" rows={2} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-ace-violet outline-none resize-none" />
+          <div className="flex gap-2">
+            {COLORS.map((cl) => (
+              <button key={cl} onClick={() => setColor(cl)} className={`w-8 h-8 rounded-full transition-transform duration-300 ${color === cl ? "scale-110 ring-2 ring-white" : ""}`} style={{ background: cl }} />
+            ))}
+          </div>
+          <button onClick={save} disabled={saving} data-testid="edit-course-submit" className="w-full bg-gradient-to-r from-ace-violet to-ace-fuchsia py-3 rounded-full font-semibold hover:scale-[1.02] active:scale-95 transition-transform duration-300 disabled:opacity-60 flex items-center justify-center">
+            {saving ? <Loader2 className="w-5 h-5 animate-spin" /> : "Save changes"}
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

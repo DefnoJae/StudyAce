@@ -148,6 +148,12 @@ class CourseInput(BaseModel):
     color: Optional[str] = "#8B5CF6"
     description: Optional[str] = ""
 
+class CourseUpdateInput(BaseModel):
+    name: Optional[str] = None
+    color: Optional[str] = None
+    description: Optional[str] = None
+    archived: Optional[bool] = None
+
 class QuizGenInput(BaseModel):
     document_ids: List[str]
     quiz_type: str  # mcq, flashcards, short_answer, fill_blank
@@ -285,7 +291,7 @@ async def me(user: dict = Depends(get_current_user)):
 @api_router.post("/courses")
 async def create_course(data: CourseInput, user: dict = Depends(get_current_user)):
     doc = {"id": str(uuid.uuid4()), "user_id": user["id"], "name": data.name, "color": data.color,
-           "description": data.description, "created_at": now_iso()}
+           "description": data.description, "archived": False, "created_at": now_iso()}
     await db.courses.insert_one(doc)
     doc.pop("_id", None)
     return doc
@@ -294,6 +300,7 @@ async def create_course(data: CourseInput, user: dict = Depends(get_current_user
 async def list_courses(user: dict = Depends(get_current_user)):
     courses = await db.courses.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(1000)
     for c in courses:
+        c["archived"] = c.get("archived", False)
         c["doc_count"] = await db.documents.count_documents({"course_id": c["id"], "is_deleted": False})
         c["quiz_count"] = await db.quizzes.count_documents({"course_id": c["id"]})
     return courses
@@ -304,6 +311,16 @@ async def get_course(course_id: str, user: dict = Depends(get_current_user)):
     if not c:
         raise HTTPException(status_code=404, detail="Course not found")
     return c
+
+@api_router.patch("/courses/{course_id}")
+async def update_course(course_id: str, data: CourseUpdateInput, user: dict = Depends(get_current_user)):
+    update = {k: v for k, v in data.model_dump(exclude_unset=True).items()}
+    if not update:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    res = await db.courses.update_one({"id": course_id, "user_id": user["id"]}, {"$set": update})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Course not found")
+    return {"ok": True}
 
 @api_router.delete("/courses/{course_id}")
 async def delete_course(course_id: str, user: dict = Depends(get_current_user)):
@@ -760,7 +777,7 @@ async def delete_key_terms(kid: str, user: dict = Depends(get_current_user)):
 @api_router.get("/dashboard")
 async def dashboard(user: dict = Depends(get_current_user)):
     uid = user["id"]
-    courses = await db.courses.count_documents({"user_id": uid})
+    courses = await db.courses.count_documents({"user_id": uid, "archived": {"$ne": True}})
     docs = await db.documents.count_documents({"user_id": uid, "is_deleted": False})
     quizzes = await db.quizzes.find({"user_id": uid}, {"_id": 0, "questions": 0}).to_list(1000)
     total_attempts = 0
