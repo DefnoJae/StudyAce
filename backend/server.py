@@ -958,3 +958,14 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
+
+
+import os
+from fastapi.staticfiles import StaticFiles
+
+if os.path.exists("static"):
+    app.mount("/", StaticFiles(directory="static", html=True), name="static")
+
+@app.get("/")
+async def root():
+    return {"status": "online", "message": "StudyAce API is running!"}
