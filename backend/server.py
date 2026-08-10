@@ -31,9 +31,38 @@ db = client[db_name]
 
 app = FastAPI()
 
-# ---------------- CORS Configuration ----------------
-# Explicitly whitelist exact origins and regex pattern for Vercel previews.
-# Avoid using '*' in allow_origins when allow_credentials=True.
+# ---------------- Custom Middleware for Preflight Robustness ----------------
+ALLOWED_ORIGINS = {
+    "https://study-ace-khaki.vercel.app",
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+}
+
+@app.middleware("http")
+async def custom_cors_preflight_middleware(request: Request, call_next):
+    # Handle preflight OPTIONS requests before Starlette's CORS middleware can reject them
+    if request.method == "OPTIONS":
+        origin = request.headers.get("origin")
+        response = StarletteResponse(status_code=200)
+        
+        # Check explicit origins or Vercel preview URLs
+        if origin in ALLOWED_ORIGINS or (origin and ".vercel.app" in origin):
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+        elif origin:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = request.headers.get("access-control-request-headers", "*")
+        return response
+
+    response = await call_next(request)
+    return response
+
+# Standard CORS Middleware for normal requests
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -45,17 +74,12 @@ app.add_middleware(
     ],
     allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
 )
 
 api_router = APIRouter(prefix="/api")
-
-# Explicit OPTIONS fallback handler for route preflights across all API endpoints
-@api_router.options("/{path:path}")
-async def options_handler(path: str):
-    return Response(status_code=200)
 
 JWT_ALGORITHM = "HS256"
 EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
