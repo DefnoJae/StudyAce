@@ -32,6 +32,8 @@ db = client[db_name]
 app = FastAPI()
 
 # ---------------- CORS Configuration ----------------
+# Explicitly whitelist exact origins and regex pattern for Vercel previews.
+# Avoid using '*' in allow_origins when allow_credentials=True.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -45,13 +47,15 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
-@app.options("/{full_path:path}")
-async def preflight_handler(full_path: str):
-    return Response(status_code=200)
-
 api_router = APIRouter(prefix="/api")
+
+# Explicit OPTIONS fallback handler for route preflights across all API endpoints
+@api_router.options("/{path:path}")
+async def options_handler(path: str):
+    return Response(status_code=200)
 
 JWT_ALGORITHM = "HS256"
 EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
