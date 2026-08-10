@@ -1,6 +1,10 @@
 import axios from "axios";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+// Clean any trailing slash from the environment variable
+const rawBackendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:8000";
+const BACKEND_URL = rawBackendUrl.replace(/\/+$/, "");
+
+// Standardize base URL so endpoints only need /auth/register, /auth/me, etc.
 export const API = `${BACKEND_URL}/api`;
 
 const api = axios.create({
