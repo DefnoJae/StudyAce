@@ -36,7 +36,7 @@ export default function Layout({ children }) {
                 <button
                   key={n.path}
                   onClick={() => navigate(n.path)}
-                  data-testid={`nav-${n.label.toLowerCase()}`}
+                  data-testid={`nav-${n.label.toLowerCase().replace(/\s+/g, "-")}`}
                   className={`flex items-center gap-3 px-4 py-3 rounded-2xl text-sm font-semibold transition-colors duration-300 ${active ? "bg-ace-violet/20 text-white border border-ace-violet/40" : "text-white/60 hover:text-white hover:bg-white/5"}`}
                 >
                   <n.icon className="w-[18px] h-[18px]" strokeWidth={2} />
