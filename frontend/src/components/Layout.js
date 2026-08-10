@@ -1,7 +1,7 @@
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { motion } from "framer-motion";
-import { GraduationCap, LayoutDashboard, LogOut, Sparkles } from "lucide-react";
+import { GraduationCap, LayoutDashboard, LogOut, Sparkles, ClipboardCheck } from "lucide-react";
 
 export default function Layout({ children }) {
   const { user, logout } = useAuth();
@@ -10,6 +10,7 @@ export default function Layout({ children }) {
 
   const nav = [
     { label: "Dashboard", icon: LayoutDashboard, path: "/" },
+    { label: "Paper Grader", icon: ClipboardCheck, path: "/paper-grader" },
   ];
 
   return (

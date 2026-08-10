@@ -7,6 +7,7 @@ import Dashboard from "@/pages/Dashboard";
 import CourseView from "@/pages/CourseView";
 import QuizPlay from "@/pages/QuizPlay";
 import Walkthrough from "@/pages/Walkthrough";
+import PaperGrader from "@/pages/PaperGrader";
 import Layout from "@/components/Layout";
 import { Loader2 } from "lucide-react";
 
@@ -30,6 +31,7 @@ function App() {
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/" element={<Protected><Dashboard /></Protected>} />
+            <Route path="/paper-grader" element={<Protected><PaperGrader /></Protected>} />
             <Route path="/courses/:courseId" element={<Protected><CourseView /></Protected>} />
             <Route path="/quiz/:quizId" element={<Protected><QuizPlay /></Protected>} />
             <Route path="/walkthrough/:wid" element={<Protected><Walkthrough /></Protected>} />

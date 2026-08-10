@@ -812,6 +812,94 @@ async def delete_key_terms(kid: str, user: dict = Depends(get_current_user)):
     return {"ok": True}
 
 
+# ---------------- Paper Grader ----------------
+@api_router.post("/paper-grader/grade")
+async def grade_paper(paper: UploadFile = File(...), rubric: UploadFile = File(None),
+                      rubric_text: str = Form(""), title: str = Form(""), previous_id: str = Form(""),
+                      user: dict = Depends(get_current_user)):
+    p_ext = paper.filename.split(".")[-1].lower() if "." in paper.filename else "bin"
+    p_data = await paper.read()
+    p_text = extract_text(p_data, p_ext)
+    files = []
+    try:
+        from emergentintegrations.llm.chat import FileContent
+        import base64 as _b64
+        if p_ext in ATTACH_EXTS:
+            files.append(FileContent(paper.content_type or "application/pdf", _b64.b64encode(p_data).decode("utf-8")))
+        rub = (rubric_text or "").strip()
+        r_name = None
+        if rubric is not None:
+            r_data = await rubric.read()
+            r_ext = rubric.filename.split(".")[-1].lower() if "." in rubric.filename else "bin"
+            rt = extract_text(r_data, r_ext)
+            rub = (rub + "\n" + rt).strip()
+            r_name = rubric.filename
+            if r_ext in ATTACH_EXTS and len(files) < 4:
+                files.append(FileContent(rubric.content_type or "application/pdf", _b64.b64encode(r_data).decode("utf-8")))
+    except Exception as e:
+        logger.error(f"paper attach failed: {e}")
+        rub = (rubric_text or "").strip()
+        r_name = rubric.filename if rubric is not None else None
+    rubric_line = f"RUBRIC:\n{rub[:15000]}" if rub else "No rubric was provided — grade using sensible academic criteria."
+    system = "You are a fair but rigorous academic grader. You respond ONLY with valid JSON (no markdown fences).\n\n" + FORMAT_RULES
+    prompt = f"""Grade the student's paper against the rubric (documents may be attached as files — read words, formulas, tables and figures).
+ALWAYS include these three core criteria in addition to any rubric-specific criteria: "Comprehension", "Structure", and "Scientific Accuracy".
+For EACH criterion give: a score from 0 to 10 (10 = perfect / fully meets the rubric), a 'did_well' note (specific strengths, reference parts of the paper), and an 'improve' note (specific, actionable steps needed to reach a perfect 10/10). Be honest, specific and constructive.
+
+Return ONLY JSON:
+{{"summary": "2-3 sentence overall assessment", "criteria": [{{"name": str, "score": number, "did_well": str, "improve": str}}]}}
+
+{rubric_line}
+
+STUDENT PAPER ({paper.filename}):
+{p_text[:80000]}"""
+    try:
+        raw = await llm_generate(system, prompt, file_contents=files)
+        parsed = sanitize_obj(parse_json_block(raw))
+    except Exception as e:
+        logger.error(f"paper grading failed: {e}")
+        raise HTTPException(status_code=500, detail="AI grading failed. Please try again with a clearer file.")
+    criteria = parsed.get("criteria", []) if isinstance(parsed, dict) else []
+    for c in criteria:
+        try:
+            c["score"] = max(0.0, min(10.0, round(float(c.get("score", 0)), 1)))
+        except Exception:
+            c["score"] = 0.0
+    total = sum(c["score"] for c in criteria)
+    overall = round(100 * total / (10 * len(criteria))) if criteria else 0
+    perfect = bool(criteria) and all(c["score"] >= 10 for c in criteria)
+    attempt = 1
+    if previous_id:
+        prev = await db.paper_grades.find_one({"id": previous_id, "user_id": user["id"]})
+        if prev:
+            attempt = prev.get("attempt", 1) + 1
+    rec = {"id": str(uuid.uuid4()), "user_id": user["id"], "title": title or paper.filename,
+           "paper_filename": paper.filename, "rubric_name": r_name, "rubric_provided": bool(rub),
+           "summary": parsed.get("summary", "") if isinstance(parsed, dict) else "",
+           "criteria": criteria, "overall_percentage": overall, "perfect": perfect,
+           "previous_id": previous_id or None, "attempt": attempt, "created_at": now_iso()}
+    await db.paper_grades.insert_one(rec)
+    rec.pop("_id", None)
+    return rec
+
+@api_router.get("/paper-grader")
+async def list_paper_grades(user: dict = Depends(get_current_user)):
+    items = await db.paper_grades.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    return items
+
+@api_router.get("/paper-grader/{gid}")
+async def get_paper_grade(gid: str, user: dict = Depends(get_current_user)):
+    g = await db.paper_grades.find_one({"id": gid, "user_id": user["id"]}, {"_id": 0})
+    if not g:
+        raise HTTPException(status_code=404, detail="Grade not found")
+    return g
+
+@api_router.delete("/paper-grader/{gid}")
+async def delete_paper_grade(gid: str, user: dict = Depends(get_current_user)):
+    await db.paper_grades.delete_one({"id": gid, "user_id": user["id"]})
+    return {"ok": True}
+
+
 # ---------------- Dashboard ----------------
 @api_router.get("/dashboard")
 async def dashboard(user: dict = Depends(get_current_user)):

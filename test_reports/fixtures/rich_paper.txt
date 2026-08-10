@@ -1,0 +1,13 @@
+Photosynthesis: An Overview
+
+Introduction
+Photosynthesis is the biochemical process by which green plants, algae, and some bacteria convert light energy, primarily from the sun, into chemical energy stored in glucose molecules. This process is fundamental to life on Earth as it produces both the oxygen we breathe and the organic compounds that form the base of nearly every food chain.
+
+The Light-Dependent Reactions
+The first stage of photosynthesis occurs in the thylakoid membranes of chloroplasts. Chlorophyll and other pigments absorb photons and excite electrons in Photosystem II. Water molecules are split (photolysis) releasing O2 as a byproduct. Electrons flow through the electron transport chain, generating a proton gradient that drives ATP synthesis via ATP synthase. Photosystem I re-energises electrons which reduce NADP+ to NADPH.
+
+The Calvin Cycle
+In the stroma, the light-independent reactions fix atmospheric CO2 using the enzyme RuBisCO. CO2 combines with ribulose-1,5-bisphosphate to form 3-phosphoglycerate. ATP and NADPH from the light reactions are then used to reduce 3-PGA into glyceraldehyde-3-phosphate (G3P), which is used to synthesise glucose and to regenerate RuBP.
+
+Conclusion
+Photosynthesis links light energy to biological chemistry, making possible the accumulation of biomass, oxygenation of the atmosphere, and the storage of energy in a form that nearly every ecosystem depends on. Understanding its mechanism has implications for agriculture, biofuels, and climate science.

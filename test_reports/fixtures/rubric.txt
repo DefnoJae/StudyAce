@@ -1,0 +1,5 @@
+Grading Rubric
+1. Comprehension - Does the paper demonstrate understanding of the topic?
+2. Structure - Is it well organised with intro, body, conclusion?
+3. Scientific Accuracy - Are facts and mechanisms correct?
+4. Depth of Analysis - Does it go beyond surface-level description?
