@@ -216,6 +216,7 @@ function QuizzesTab({ courseId, docs, quizzes, folders, reload, navigate }) {
   };
 
   const delFolder = async (id) => {
+    if (!window.confirm("Delete this subfolder? Quizzes inside will move to Uncategorized.")) return;
     await api.delete(`/folders/${id}`);
     toast.success("Subfolder deleted (quizzes moved out)");
     if (activeFolder === id) setActiveFolder(null);
@@ -223,6 +224,7 @@ function QuizzesTab({ courseId, docs, quizzes, folders, reload, navigate }) {
   };
 
   const delQuiz = async (id) => {
+    if (!window.confirm("Delete this quiz/flashcard set? This cannot be undone.")) return;
     await api.delete(`/quizzes/${id}`);
     toast.success("Deleted"); reload();
   };

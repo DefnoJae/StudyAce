@@ -344,9 +344,10 @@ async def generate_quiz(course_id: str, data: QuizGenInput, user: dict = Depends
     for d in docs:
         material += f"\n\n=== {d['original_filename']} ===\n{d.get('text','')[:40000]}"
     material = material[:120000]
+    num_q = max(1, min(50, int(data.num_questions)))
     topics_line = f"Focus specifically on these topics: {data.topics}." if data.topics else ""
     system = "You are an expert tutor that creates high-quality study assessments. You always respond with valid JSON only, no markdown."
-    prompt = f"""Create a {data.quiz_type} quiz with exactly {data.num_questions} questions from the study material below. {topics_line}
+    prompt = f"""Create a {data.quiz_type} quiz with exactly {num_q} questions from the study material below. {topics_line}
 {QUIZ_INSTRUCTIONS.get(data.quiz_type, QUIZ_INSTRUCTIONS['mcq'])}
 For every question, 'source' MUST reference which document/section the answer comes from (use the document names given).
 Respond ONLY with JSON: {{"questions": [ ...question objects... ]}}
