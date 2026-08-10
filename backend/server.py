@@ -183,10 +183,40 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 # ---------------- LLM ----------------
-async def llm_generate(system_message: str, prompt: str, session_id: str = None) -> str:
+FORMAT_RULES = """FORMATTING RULES (very important, follow exactly):
+- Write clean, readable prose in Markdown. Use ## for main headings, ### for sub-headings, and **bold** for key terms/labels. Use short paragraphs, bullet lists, and leave a blank line between sections. Maintain clear visual hierarchy.
+- NEVER use LaTeX, dollar signs ($), or backslash math commands (no \\frac, \\times, \\div, etc.). NEVER output raw #, ##, ### as literal text mid-sentence.
+- Use REAL Unicode math symbols: × (multiply), ÷ (divide), − (minus), ± ≤ ≥ ≠ ≈ √ ∑ ∫ ∆ π θ ° → ∞, and superscripts/subscripts like x², xⁿ, H₂O.
+- For a stacked fraction (numerator on top, denominator on bottom) write EXACTLY [[frac:NUMERATOR|DENOMINATOR]] — e.g. [[frac:a + b|2c]]. For simple values you may use ½, ¾. Put display equations centered on their own line using [[center:...]].
+- Keep the screen uncluttered and the text naturally formatted, like a great textbook."""
+
+ATTACH_EXTS = ("pdf", "png", "jpg", "jpeg", "webp", "gif")
+
+async def fetch_doc_materials(doc_ids, user_id, attach_files=True, per_text=45000, max_files=6, max_bytes=18 * 1024 * 1024):
+    docs = await db.documents.find({"id": {"$in": doc_ids}, "user_id": user_id, "is_deleted": False}, {"_id": 0}).to_list(100)
+    material = ""
+    files = []
+    total = 0
+    for d in docs:
+        t = (d.get("text") or "")[:per_text]
+        material += f"\n\n=== DOCUMENT: {d['original_filename']} ===\n{t}"
+        if attach_files and d.get("ext") in ATTACH_EXTS and len(files) < max_files:
+            try:
+                from emergentintegrations.llm.chat import FileContent
+                content, ctype = get_object(d["storage_path"])
+                if total + len(content) <= max_bytes:
+                    import base64 as _b64
+                    mime = d.get("content_type") or ctype or "application/pdf"
+                    files.append(FileContent(mime, _b64.b64encode(content).decode("utf-8")))
+                    total += len(content)
+            except Exception as e:
+                logger.error(f"attach file failed: {e}")
+    return material[:160000], files, docs
+
+async def llm_generate(system_message: str, prompt: str, session_id: str = None, file_contents=None) -> str:
     from emergentintegrations.llm.chat import LlmChat, UserMessage
     chat = LlmChat(api_key=EMERGENT_KEY, session_id=session_id or str(uuid.uuid4()), system_message=system_message).with_model("gemini", "gemini-3-flash-preview")
-    resp = await chat.send_message(UserMessage(text=prompt))
+    resp = await chat.send_message(UserMessage(text=prompt, file_contents=file_contents or []))
     return resp
 
 def parse_json_block(text: str):
@@ -269,6 +299,21 @@ async def delete_course(course_id: str, user: dict = Depends(get_current_user)):
     return {"ok": True}
 
 # ---------------- Document routes ----------------
+async def suggest_doc_name(text, filename, ext, data=None, ctype=None):
+    try:
+        files = []
+        if (not text or len(text.strip()) < 40) and ext in ATTACH_EXTS and data:
+            from emergentintegrations.llm.chat import FileContent
+            import base64 as _b64
+            files = [FileContent(ctype or "application/pdf", _b64.b64encode(data).decode("utf-8"))]
+        prompt = f"Suggest a concise, descriptive title (3 to 8 words, Title Case, NO file extension, no quotes) for this study document based on its actual content. Return ONLY the title.\n\nOriginal filename: {filename}\nContent excerpt:\n{(text or '')[:4000]}"
+        name = await llm_generate("You name study documents concisely and accurately.", prompt, file_contents=files)
+        name = (name or "").strip().strip('"').split("\n")[0][:80]
+        return name or filename
+    except Exception as e:
+        logger.error(f"name suggest failed: {e}")
+        return filename
+
 @api_router.post("/courses/{course_id}/documents")
 async def upload_document(course_id: str, file: UploadFile = File(...), user: dict = Depends(get_current_user)):
     course = await db.courses.find_one({"id": course_id, "user_id": user["id"]})
@@ -279,12 +324,21 @@ async def upload_document(course_id: str, file: UploadFile = File(...), user: di
     path = f"{APP_NAME}/uploads/{user['id']}/{uuid.uuid4()}.{ext}"
     result = put_object(path, data, file.content_type or "application/octet-stream")
     text = extract_text(data, ext)
+    suggested = await suggest_doc_name(text, file.filename, ext, data, file.content_type)
     doc = {"id": str(uuid.uuid4()), "user_id": user["id"], "course_id": course_id,
            "storage_path": result["path"], "original_filename": file.filename,
+           "name": suggested, "suggested_name": suggested,
            "content_type": file.content_type, "ext": ext, "size": result.get("size", len(data)),
            "text": text[:200000], "is_deleted": False, "created_at": now_iso()}
     await db.documents.insert_one(doc)
     return {k: v for k, v in doc.items() if k not in ("_id", "text")}
+
+@api_router.patch("/documents/{doc_id}")
+async def rename_document(doc_id: str, data: FolderInput, user: dict = Depends(get_current_user)):
+    res = await db.documents.update_one({"id": doc_id, "user_id": user["id"]}, {"$set": {"name": data.name}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return {"ok": True}
 
 @api_router.get("/courses/{course_id}/documents")
 async def list_documents(course_id: str, user: dict = Depends(get_current_user)):
@@ -299,11 +353,11 @@ async def get_document_text(doc_id: str, user: dict = Depends(get_current_user))
     return {"id": d["id"], "filename": d["original_filename"], "text": d.get("text", ""), "ext": d["ext"]}
 
 @api_router.get("/documents/{doc_id}/download")
-async def download_document(doc_id: str, authorization: str = Header(None), auth: str = Query(None)):
-    token = None
-    if authorization and authorization.startswith("Bearer "):
+async def download_document(doc_id: str, request: Request, authorization: str = Header(None), auth: str = Query(None)):
+    token = request.cookies.get("access_token")
+    if not token and authorization and authorization.startswith("Bearer "):
         token = authorization[7:]
-    elif auth:
+    elif not token and auth:
         token = auth
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -340,22 +394,21 @@ async def generate_quiz(course_id: str, data: QuizGenInput, user: dict = Depends
     docs = await db.documents.find({"id": {"$in": data.document_ids}, "user_id": user["id"]}, {"_id": 0}).to_list(100)
     if not docs:
         raise HTTPException(status_code=400, detail="No documents selected")
-    material = ""
-    for d in docs:
-        material += f"\n\n=== {d['original_filename']} ===\n{d.get('text','')[:40000]}"
-    material = material[:120000]
+    material, file_contents, _ = await fetch_doc_materials(data.document_ids, user["id"])
     num_q = max(1, min(50, int(data.num_questions)))
     topics_line = f"Focus specifically on these topics: {data.topics}." if data.topics else ""
-    system = "You are an expert tutor that creates high-quality study assessments. You always respond with valid JSON only, no markdown."
-    prompt = f"""Create a {data.quiz_type} quiz with exactly {num_q} questions from the study material below. {topics_line}
+    system = "You are an expert tutor that creates high-quality study assessments. You always respond with VALID JSON only (no markdown fences, no prose)."
+    prompt = f"""Create a {data.quiz_type} quiz with exactly {num_q} questions from the study material below (documents may be attached as files — read their words, formulas, diagrams and pictures too). {topics_line}
 {QUIZ_INSTRUCTIONS.get(data.quiz_type, QUIZ_INSTRUCTIONS['mcq'])}
-For every question, 'source' MUST reference which document/section the answer comes from (use the document names given).
+IMPORTANT MIX: Do NOT make every question pure theory. When the material contains formulas, equations, or worked examples, include a healthy mix of formula-based / calculation / apply-the-formula questions alongside conceptual/theory questions.
+MATH FORMATTING inside any string: use real Unicode symbols (× ÷ − ± ≤ ≥ ≠ √ π θ ° x²), NEVER LaTeX, $ or backslash commands. For stacked fractions write [[frac:numerator|denominator]].
+For every question, 'source' MUST reference the specific document name and page/slide/section the answer is drawn from.
 Respond ONLY with JSON: {{"questions": [ ...question objects... ]}}
 
 STUDY MATERIAL:
 {material}"""
     try:
-        raw = await llm_generate(system, prompt)
+        raw = await llm_generate(system, prompt, file_contents=file_contents)
         parsed = parse_json_block(raw)
         questions = parsed.get("questions", parsed) if isinstance(parsed, dict) else parsed
     except Exception as e:
@@ -464,7 +517,7 @@ async def chat_with_docs(course_id: str, data: ChatInput, user: dict = Depends(g
             context += f"\n\n=== {d['original_filename']} ===\n{d.get('text','')[:30000]}"
     history = await db.chat_messages.find({"session_id": session_id, "user_id": user["id"]}, {"_id": 0}).sort("created_at", 1).to_list(50)
     hist_text = "\n".join(f"{m['role']}: {m['content']}" for m in history[-10:])
-    system = "You are StudyAce, a friendly, encouraging AI tutor. Answer using the provided study material. Cite the document name when referencing facts. If the answer isn't in the material, say so and give your best general guidance. Keep answers clear and concise."
+    system = "You are StudyAce, a friendly, encouraging AI tutor. Answer using the provided study material. Cite the document name when referencing facts. If the answer isn't in the material, say so and give your best general guidance. Keep answers focused and well-structured.\n\n" + FORMAT_RULES
     prompt = f"STUDY MATERIAL:{context[:100000] or ' (none selected)'}\n\nCONVERSATION:\n{hist_text}\n\nStudent: {data.message}\nStudyAce:"
     try:
         answer = await llm_generate(system, prompt, session_id)
@@ -520,6 +573,170 @@ async def list_study_plans(course_id: str, user: dict = Depends(get_current_user
 async def delete_plan(plan_id: str, user: dict = Depends(get_current_user)):
     await db.study_plans.delete_one({"id": plan_id, "user_id": user["id"]})
     return {"ok": True}
+
+# ---------------- Interactive Walkthrough ----------------
+class GenFromDocsInput(BaseModel):
+    document_ids: List[str]
+    title: Optional[str] = None
+
+class ProgressInput(BaseModel):
+    current_index: int
+
+@api_router.post("/courses/{course_id}/walkthrough/generate")
+async def generate_walkthrough(course_id: str, data: GenFromDocsInput, user: dict = Depends(get_current_user)):
+    course = await db.courses.find_one({"id": course_id, "user_id": user["id"]})
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    material, files, docs = await fetch_doc_materials(data.document_ids, user["id"])
+    if not docs:
+        raise HTTPException(status_code=400, detail="No documents selected")
+    system = "You are an outstanding, engaging university lecturer creating an interactive lecture. You respond ONLY with valid JSON (no markdown fences).\n\n" + FORMAT_RULES
+    prompt = f"""Build a COMPLETE, interactive walkthrough lecture from the attached/selected study documents (read their words, formulas, diagrams and pictures). Teach it so a student who has NEVER read the material will truly understand it.
+
+RULES:
+- Be COMPREHENSIVE. Cover everything important AND semi-important. Do NOT summarize or shorten to save space — make as many steps as the material needs (a rich document may need 20-40+ steps). Judge from the amount of content provided.
+- One idea per step so the screen is never crowded. Progressive: build concepts up.
+- Mix step types: explain concepts simply, give real-world analogies/applications, work out example problems with step-by-step solutions, and ask the student a question (with its answer) to check understanding.
+- Every step's "source" MUST cite the document name and the page/slide/section it is drawn from.
+- Use the FORMATTING RULES for all "content" fields (clean prose, Unicode math, [[frac:a|b]] for fractions, [[center:...]] for display equations).
+
+Return ONLY JSON:
+{{"title": "lecture title", "intro": "1-2 sentence hook of what they'll learn", "steps": [
+  {{"type": "concept" | "example" | "realworld" | "question", "heading": "short heading", "content": "the teaching content in clean markdown", "source": "DocumentName — page/slide X", "question": "only if type=question", "answer": "only if type=question"}}
+]}}"""
+    try:
+        raw = await llm_generate(system, prompt, file_contents=files)
+        parsed = parse_json_block(raw)
+    except Exception as e:
+        logger.error(f"walkthrough failed: {e}")
+        raise HTTPException(status_code=500, detail="AI walkthrough generation failed. Please try again.")
+    doc = {"id": str(uuid.uuid4()), "user_id": user["id"], "course_id": course_id,
+           "title": data.title or parsed.get("title") or "Interactive Walkthrough",
+           "intro": parsed.get("intro", ""), "steps": parsed.get("steps", []),
+           "document_ids": data.document_ids, "progress": 0, "created_at": now_iso()}
+    await db.walkthroughs.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.get("/courses/{course_id}/walkthroughs")
+async def list_walkthroughs(course_id: str, user: dict = Depends(get_current_user)):
+    items = await db.walkthroughs.find({"course_id": course_id, "user_id": user["id"]}, {"_id": 0, "steps": 0}).sort("created_at", -1).to_list(200)
+    for it in items:
+        w = await db.walkthroughs.find_one({"id": it["id"]}, {"_id": 0, "steps": 1})
+        it["total_steps"] = len(w.get("steps", []))
+    return items
+
+@api_router.get("/walkthroughs/{wid}")
+async def get_walkthrough(wid: str, user: dict = Depends(get_current_user)):
+    w = await db.walkthroughs.find_one({"id": wid, "user_id": user["id"]}, {"_id": 0})
+    if not w:
+        raise HTTPException(status_code=404, detail="Walkthrough not found")
+    return w
+
+@api_router.patch("/walkthroughs/{wid}/progress")
+async def update_walkthrough_progress(wid: str, data: ProgressInput, user: dict = Depends(get_current_user)):
+    await db.walkthroughs.update_one({"id": wid, "user_id": user["id"]}, {"$set": {"progress": data.current_index}})
+    return {"ok": True}
+
+@api_router.delete("/walkthroughs/{wid}")
+async def delete_walkthrough(wid: str, user: dict = Depends(get_current_user)):
+    await db.walkthroughs.delete_one({"id": wid, "user_id": user["id"]})
+    return {"ok": True}
+
+# ---------------- Study Guide ----------------
+@api_router.post("/courses/{course_id}/study-guide/generate")
+async def generate_study_guide(course_id: str, data: GenFromDocsInput, user: dict = Depends(get_current_user)):
+    course = await db.courses.find_one({"id": course_id, "user_id": user["id"]})
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    material, files, docs = await fetch_doc_materials(data.document_ids, user["id"])
+    if not docs:
+        raise HTTPException(status_code=400, detail="No documents selected")
+    system = "You are an expert study-guide author. You write beautifully organized, comprehensive study guides in clean Markdown.\n\n" + FORMAT_RULES
+    prompt = f"""Write a DETAILED, well-organized study guide from the attached/selected documents (read words, formulas, diagrams and pictures). Be comprehensive — cover all important and semi-important material; do not over-shorten.
+
+Structure with ## sections and ### sub-sections, **bold** key terms, bullet points, worked examples, and clearly formatted equations (Unicode symbols, [[frac:a|b]] for fractions, [[center:...]] for display equations). Where useful, reference the source document/page.
+
+END the guide with a section titled exactly:
+## Quiz Revision Checklist
+Then list the key things the student must be able to do, each on its own line starting with "- [ ] " (an empty markdown checkbox) so they can tick them off.
+
+Return the study guide as MARKDOWN text only (no JSON, no code fences)."""
+    try:
+        content = await llm_generate(system, prompt, file_contents=files)
+    except Exception as e:
+        logger.error(f"study guide failed: {e}")
+        raise HTTPException(status_code=500, detail="AI study guide generation failed. Please try again.")
+    doc = {"id": str(uuid.uuid4()), "user_id": user["id"], "course_id": course_id,
+           "title": data.title or f"{course['name']} Study Guide",
+           "content": content, "document_ids": data.document_ids,
+           "checklist_state": {}, "created_at": now_iso()}
+    await db.study_guides.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.get("/courses/{course_id}/study-guides")
+async def list_study_guides(course_id: str, user: dict = Depends(get_current_user)):
+    items = await db.study_guides.find({"course_id": course_id, "user_id": user["id"]}, {"_id": 0, "content": 0}).sort("created_at", -1).to_list(200)
+    return items
+
+@api_router.get("/study-guides/{gid}")
+async def get_study_guide(gid: str, user: dict = Depends(get_current_user)):
+    g = await db.study_guides.find_one({"id": gid, "user_id": user["id"]}, {"_id": 0})
+    if not g:
+        raise HTTPException(status_code=404, detail="Study guide not found")
+    return g
+
+@api_router.patch("/study-guides/{gid}/checklist")
+async def update_guide_checklist(gid: str, data: dict, user: dict = Depends(get_current_user)):
+    await db.study_guides.update_one({"id": gid, "user_id": user["id"]}, {"$set": {"checklist_state": data.get("checklist_state", {})}})
+    return {"ok": True}
+
+@api_router.delete("/study-guides/{gid}")
+async def delete_study_guide(gid: str, user: dict = Depends(get_current_user)):
+    await db.study_guides.delete_one({"id": gid, "user_id": user["id"]})
+    return {"ok": True}
+
+# ---------------- Key Terms ----------------
+@api_router.post("/courses/{course_id}/key-terms/generate")
+async def generate_key_terms(course_id: str, data: GenFromDocsInput, user: dict = Depends(get_current_user)):
+    course = await db.courses.find_one({"id": course_id, "user_id": user["id"]})
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    material, files, docs = await fetch_doc_materials(data.document_ids, user["id"])
+    if not docs:
+        raise HTTPException(status_code=400, detail="No documents selected")
+    system = "You extract key terminology from study material. You respond ONLY with valid JSON (no markdown fences).\n\n" + FORMAT_RULES
+    prompt = f"""Scan the attached/selected documents THOROUGHLY (words, formulas, diagrams, pictures) and extract the MOST IMPORTANT terms, concepts, and vocabulary a student must know. Be comprehensive.
+
+For each: a clear, student-friendly definition. Use clean formatting in definitions (Unicode math, [[frac:a|b]] for fractions). Sort the list ALPHABETICALLY by term (case-insensitive).
+
+Return ONLY JSON: {{"terms": [{{"term": "Term", "definition": "clear definition", "source": "DocumentName — page/slide"}}]}}"""
+    try:
+        raw = await llm_generate(system, prompt, file_contents=files)
+        parsed = parse_json_block(raw)
+        terms = parsed.get("terms", parsed) if isinstance(parsed, dict) else parsed
+        terms = sorted(terms, key=lambda t: (t.get("term", "").lower()))
+    except Exception as e:
+        logger.error(f"key terms failed: {e}")
+        raise HTTPException(status_code=500, detail="AI key term generation failed. Please try again.")
+    doc = {"id": str(uuid.uuid4()), "user_id": user["id"], "course_id": course_id,
+           "title": data.title or "Key Terms", "terms": terms,
+           "document_ids": data.document_ids, "created_at": now_iso()}
+    await db.key_terms.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.get("/courses/{course_id}/key-terms")
+async def list_key_terms(course_id: str, user: dict = Depends(get_current_user)):
+    items = await db.key_terms.find({"course_id": course_id, "user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    return items
+
+@api_router.delete("/key-terms/{kid}")
+async def delete_key_terms(kid: str, user: dict = Depends(get_current_user)):
+    await db.key_terms.delete_one({"id": kid, "user_id": user["id"]})
+    return {"ok": True}
+
 
 # ---------------- Dashboard ----------------
 @api_router.get("/dashboard")

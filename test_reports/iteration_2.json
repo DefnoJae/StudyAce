@@ -1,0 +1,40 @@
+{
+  "summary": "Round-2 feature testing of StudyAce (auto-name on upload, preview original, Walkthrough, Study Guide + checklist, Key Terms, quiz formula-mix, clean formatting). Backend: 12/12 new pytest tests PASS on top of the existing 20/20 regression suite. Frontend E2E via Playwright verified: login -> course -> Documents (preview PDF-frame OR open-original-btn for .txt), Walkthrough player (step, prev/next, reveal-answer, progress bar, source ref, Physics of Projectile Motion 19 steps rendered cleanly), Study Guide viewer opens with 'Quiz Revision Checklist' + 10 fillable checkboxes, Key Terms viewer lists 7 terms alphabetically (Acceleration→Work), AI Chat replies come back. Auto-name verified via backend (feat1786326500 seed doc predates the feature so name==original filename). ONE CRITICAL FORMATTING BUG found: the AI (Gemini 3 Flash) occasionally emits MALFORMED [[frac:...]] tokens (extra `]]`, or content spillover like `[[frac:1|2]]mv²]]`), which the RichText regex parser cannot recover from, so users see literal `[[frac:1|2` and `]]` and `mv²]]` inside the rendered study guide AND chat replies. This directly violates the CLEAN FORMATTING requirement ('no raw [[frac ... ]] tokens visible; stacked fractions render via <span data-testid=frac>').",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "RichText / Study Guide viewer", "issue": "Literal '[[frac:1|2]]mv²]]', '[[frac:∆s|∆t]]]]' etc. show up as visible text inside guide-content because Gemini output has malformed frac tokens (extra `]]`, content OUTSIDE `]]`). Parser only strips well-formed `[[frac:num|den]]` so the stray `]]` and trailing `mv²]]` leak. See screenshot /app/test_reports/frontend_final.png and /app/test_reports/chat_final.png.", "selector": "[data-testid='guide-content'], [data-testid='chat-messages']", "priority": "HIGH"},
+      {"component": "AI Chat", "issue": "Same as above — literal '[[frac:1|2' and 'gt²]]' rendered as plain text in the reply body (e.g. y = v₀ × sin(θ) × t − [[frac:1|2 gt²]]).", "selector": "[data-testid='chat-messages']", "priority": "HIGH"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "All Radix Dialogs", "issues": ["Missing DialogDescription / aria-describedby warning still logged (non-blocking, carried over from iter 1)."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_studyace_features.py",
+    "/app/backend/tests/test_studyace_backend.py",
+    "/app/test_reports/pytest/features_results.xml"
+  ],
+  "action_items": [
+    "Fix the malformed-fraction rendering bug. Two complementary fixes are recommended: (a) Tighten the LLM prompt / FORMAT_RULES to REJECT patterns like '[[frac:X|Y]]Z]]' and '[[frac:X|Y]]]]' — instruct the model to always write ONE well-formed [[frac:NUM|DEN]] per stacked fraction with no trailing brackets or extra ]]; (b) Make RichText.js parser resilient — after the frac regex, also STRIP any orphan '[[frac:...' openers or bare ']]' remaining in the text (e.g. run `.replace(/\\]\\]/g,'').replace(/\\[\\[frac:[^\\]]*$/,'')` on the residual chunks before passing to ReactMarkdown), and/or post-process the LLM output server-side to normalise these tokens before storage. Repro: log in as feat1786326500@test.com / pass1234 -> Physics course -> Study Guide tab -> Read Guide -> observe literal '[[frac:1|2]]mv²]]' in Kinetic Energy section. Also visible in AI Chat when asking about projectile motion.",
+    "(Minor, carried over) Add DialogDescription to Radix DialogContent components to silence a11y console warnings."
+  ],
+  "critical_code_review_comments": [
+    "RichText.renderTokens (/app/frontend/src/components/RichText.js) is not defensive: any LLM deviation from the strict `[[frac:num|den]]` shape (extra brackets, content outside the closer, missing pipe) causes raw tokens to leak into the final DOM. Consider a two-pass sanitiser (strip bare ']]' after a completed frac, drop stray '[[frac:' openers with no matching closer) or use a real tokeniser.",
+    "server.py FORMAT_RULES should include an explicit anti-example for the malformed pattern (e.g. WRONG: [[frac:1|2]]mv²]] — RIGHT: [[frac:1|2 mv²|1]] or (1/2)mv² or [[frac:mv²|2]]).",
+    "generate_walkthrough/generate_study_guide/generate_key_terms all silently trust LLM output structure (no validation/post-processing). At minimum they could run a regex sanitiser before persisting to Mongo so bad tokens never reach the client.",
+    "Study-guide checklist re-renders after PATCH — checkbox handles get detached; UI is fine (Playwright locator re-resolves) but any code doing DOM refs would break. Consider a stable key strategy in RichText input renderer.",
+    "download_document is correct now (cookie auth) — good fix. preview iframe uses blob URL — no auth-in-URL leak, nice."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_studyace_features.py (new — 12 tests)"
+  ],
+  "success_rate": {"backend": "100% (32/32: 20 regression + 12 new)", "frontend": "85% — all navigational + interactive flows work; formatting bug in 2 surfaces (Study Guide + Chat) when material has stacked fractions"},
+  "test_credentials": "Existing verified user: feat1786326500@test.com / pass1234 (Physics course a2051b73-b492-4769-a675-aa0991d3fbb0). Backend tests create ephemeral feat2_<uuid>@example.com users.",
+  "seed_data_creation": "Backend features test creates a fresh user with a TEST_Physics R2 course, one kinematics_notes.txt doc, one walkthrough, one study guide, one key-terms set, one MCQ quiz — all persist after run (prefixed TEST_).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Repro the formatting bug quickly: `curl` login as feat1786326500 -> GET /api/study-guides/<gid> -> grep for '[[frac:' matches with `]]]]` or `]]mv` in content. After main agent fixes prompt/parser, re-run /app/backend/tests/test_studyace_features.py::TestStudyGuide and re-check the guide viewer + chat for stray '[[' or ']]' characters. Key-terms first-line text extraction returns duplicated names ('AccelerationAcceleration') — that's a Playwright text_content quirk (h3 + source cite both contain the term); not a real UI defect — visually the term appears once in the card.",
+  "rca of the issue": "Gemini 3 Flash occasionally emits malformed frac tokens in study-guide markdown and chat replies (observed shapes: `[[frac:∆s|∆t]]]]` with 4 closing brackets, and `[[frac:1|2]]mv²]]` where the intended stacked fraction is (1/2)mv² but the model split it as frac(1,2) followed by literal mv² and a stray `]]`). The frontend regex `/\\[\\[frac:([^|\\]]*)\\|([^\\]]*)\\]\\]/` correctly matches the FIRST well-formed `[[frac:1|2]]` but leaves the trailing `mv²]]` untouched, which then goes to ReactMarkdown and renders as visible text. Fix: strengthen prompt (explicit anti-example) + add defensive server-side / client-side sanitiser that strips orphan `]]` and unmatched `[[frac:` sequences."
+}

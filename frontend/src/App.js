@@ -6,6 +6,7 @@ import Login from "@/pages/Login";
 import Dashboard from "@/pages/Dashboard";
 import CourseView from "@/pages/CourseView";
 import QuizPlay from "@/pages/QuizPlay";
+import Walkthrough from "@/pages/Walkthrough";
 import Layout from "@/components/Layout";
 import { Loader2 } from "lucide-react";
 
@@ -31,6 +32,7 @@ function App() {
             <Route path="/" element={<Protected><Dashboard /></Protected>} />
             <Route path="/courses/:courseId" element={<Protected><CourseView /></Protected>} />
             <Route path="/quiz/:quizId" element={<Protected><QuizPlay /></Protected>} />
+            <Route path="/walkthrough/:wid" element={<Protected><Walkthrough /></Protected>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>

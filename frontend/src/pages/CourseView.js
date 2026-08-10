@@ -7,10 +7,11 @@ import {
   ArrowLeft, Upload, FileText, Trash2, Loader2, Brain, MessageCircle,
   CalendarDays, Plus, Sparkles, Send, Eye, Play, ListChecks, Layers,
   PencilLine, AlignLeft, X, Download, CheckCircle2, FolderPlus, Folder,
-  Pencil, FolderOpen, ChevronRight
+  Pencil, FolderOpen, ChevronRight, Presentation, Library, BookOpen, GraduationCap
 } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import RichText from "@/components/RichText";
 
 const QUIZ_TYPES = [
   { id: "mcq", label: "Multiple Choice", icon: ListChecks },
@@ -64,7 +65,7 @@ export default function CourseView() {
 
       <Tabs defaultValue="documents">
         <TabsList className="glass rounded-full p-1.5 h-auto flex-wrap gap-1 bg-transparent">
-          {[["documents", "Documents", FileText], ["quizzes", "Quizzes", Brain], ["chat", "AI Chat", MessageCircle], ["plan", "Study Plan", CalendarDays]].map(([v, l, Icon]) => (
+          {[["documents", "Documents", FileText], ["walkthrough", "Walkthrough", Presentation], ["guide", "Study Guide", BookOpen], ["terms", "Key Terms", Library], ["quizzes", "Quizzes", Brain], ["chat", "AI Chat", MessageCircle], ["plan", "Study Plan", CalendarDays]].map(([v, l, Icon]) => (
             <TabsTrigger key={v} value={v} data-testid={`tab-${v}`} className="rounded-full px-4 py-2 data-[state=active]:bg-ace-violet data-[state=active]:text-white text-white/60 font-semibold text-sm">
               <Icon className="w-4 h-4 mr-1.5" /> {l}
             </TabsTrigger>
@@ -73,6 +74,15 @@ export default function CourseView() {
 
         <TabsContent value="documents" className="mt-6">
           <DocumentsTab courseId={courseId} docs={docs} reload={loadAll} />
+        </TabsContent>
+        <TabsContent value="walkthrough" className="mt-6">
+          <WalkthroughTab courseId={courseId} docs={docs} navigate={navigate} />
+        </TabsContent>
+        <TabsContent value="guide" className="mt-6">
+          <StudyGuideTab courseId={courseId} docs={docs} />
+        </TabsContent>
+        <TabsContent value="terms" className="mt-6">
+          <KeyTermsTab courseId={courseId} docs={docs} />
         </TabsContent>
         <TabsContent value="quizzes" className="mt-6">
           <QuizzesTab courseId={courseId} docs={docs} quizzes={quizzes} folders={folders} reload={loadAll} navigate={navigate} />
@@ -143,8 +153,9 @@ function DocumentsTab({ courseId, docs, reload }) {
                 <button onClick={() => del(d.id)} data-testid={`delete-doc-${d.id}`} className="text-white/30 hover:text-red-400 transition-colors duration-300"><Trash2 className="w-4 h-4" /></button>
               </div>
               <div>
-                <p className="font-semibold text-sm truncate">{d.original_filename}</p>
-                <p className="text-xs text-white/40 uppercase mt-0.5">{d.ext} · {(d.size / 1024).toFixed(0)} KB</p>
+                <p className="font-semibold text-sm truncate" title={d.name || d.original_filename}>{d.name || d.original_filename}</p>
+                <p className="text-xs text-white/40 truncate mt-0.5">{d.original_filename}</p>
+                <p className="text-xs text-white/30 uppercase mt-0.5">{d.ext} · {(d.size / 1024).toFixed(0)} KB</p>
               </div>
               <button onClick={() => setPreview(d)} data-testid={`preview-doc-${d.id}`} className="mt-auto flex items-center justify-center gap-1.5 text-sm text-ace-violet hover:text-white bg-white/5 hover:bg-ace-violet/20 rounded-full py-2 transition-colors duration-300">
                 <Eye className="w-4 h-4" /> Preview
@@ -160,19 +171,57 @@ function DocumentsTab({ courseId, docs, reload }) {
 }
 
 function PreviewDialog({ doc, onClose }) {
+  const [blobUrl, setBlobUrl] = useState(null);
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
+  const isPdf = doc?.ext === "pdf";
+  const isImg = ["png", "jpg", "jpeg", "webp", "gif"].includes(doc?.ext);
+  const canEmbed = isPdf || isImg;
+
   useEffect(() => {
     if (!doc) return;
+    setBlobUrl(null); setText("");
     setLoading(true);
-    api.get(`/documents/${doc.id}/text`).then((r) => setText(r.data.text || "(No extractable text)")).catch(() => setText("(Preview unavailable)")).finally(() => setLoading(false));
+    if (canEmbed) {
+      api.get(`/documents/${doc.id}/download`, { responseType: "blob" })
+        .then((r) => setBlobUrl(URL.createObjectURL(r.data)))
+        .catch(() => toast.error("Preview failed"))
+        .finally(() => setLoading(false));
+    } else {
+      api.get(`/documents/${doc.id}/text`).then((r) => setText(r.data.text || "(No extractable text)")).catch(() => setText("(Preview unavailable)")).finally(() => setLoading(false));
+    }
+    return () => { setBlobUrl((u) => { if (u) URL.revokeObjectURL(u); return null; }); };
   }, [doc]);
+
+  const openOriginal = () => {
+    api.get(`/documents/${doc.id}/download`, { responseType: "blob" }).then((r) => {
+      const url = URL.createObjectURL(r.data);
+      window.open(url, "_blank");
+    });
+  };
+
   return (
     <Dialog open={!!doc} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="glass-strong border-white/10 text-white max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
-        <DialogHeader><DialogTitle className="font-head truncate pr-6">{doc?.original_filename}</DialogTitle></DialogHeader>
-        <div className="overflow-y-auto mt-2 text-sm text-white/70 whitespace-pre-wrap leading-relaxed" data-testid="doc-preview-text">
-          {loading ? <Loader2 className="w-5 h-5 animate-spin text-ace-violet" /> : text.slice(0, 20000)}
+      <DialogContent className="glass-strong border-white/10 text-white max-w-4xl max-h-[88vh] overflow-hidden flex flex-col">
+        <DialogHeader>
+          <DialogTitle className="font-head truncate pr-6">{doc?.name || doc?.original_filename}</DialogTitle>
+        </DialogHeader>
+        <div className="flex-1 overflow-hidden mt-2" data-testid="doc-preview">
+          {loading ? (
+            <div className="flex justify-center py-16"><Loader2 className="w-6 h-6 animate-spin text-ace-violet" /></div>
+          ) : isPdf && blobUrl ? (
+            <iframe src={blobUrl} title="pdf-preview" className="w-full h-[70vh] rounded-xl bg-white" data-testid="pdf-frame" />
+          ) : isImg && blobUrl ? (
+            <img src={blobUrl} alt="preview" className="max-h-[70vh] mx-auto rounded-xl object-contain" />
+          ) : (
+            <div className="space-y-4">
+              <div className="glass rounded-xl p-4 flex items-center justify-between">
+                <p className="text-sm text-white/60">Inline preview isn't supported for .{doc?.ext} files. Open the original or read the scanned text below.</p>
+                <button onClick={openOriginal} data-testid="open-original-btn" className="flex items-center gap-1.5 text-sm bg-ace-violet/20 hover:bg-ace-violet/30 rounded-full px-4 py-2 transition-colors duration-300 shrink-0 ml-3"><Download className="w-4 h-4" /> Open</button>
+              </div>
+              <div className="overflow-y-auto max-h-[55vh] text-sm text-white/70 whitespace-pre-wrap leading-relaxed">{text.slice(0, 20000)}</div>
+            </div>
+          )}
         </div>
       </DialogContent>
     </Dialog>
@@ -458,8 +507,8 @@ function ChatTab({ courseId, docs }) {
           )}
           {messages.map((m, i) => (
             <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-              <div className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap leading-relaxed ${m.role === "user" ? "bg-gradient-to-r from-ace-violet to-ace-fuchsia text-white" : "glass text-white/90"}`}>
-                {m.content}
+              <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${m.role === "user" ? "bg-gradient-to-r from-ace-violet to-ace-fuchsia text-white whitespace-pre-wrap" : "glass text-white/90"}`}>
+                {m.role === "user" ? m.content : <RichText content={m.content} />}
               </div>
             </div>
           ))}
@@ -562,6 +611,257 @@ function PlanTab({ courseId, plans, reload }) {
             <button onClick={create} disabled={creating} data-testid="create-plan-submit" className="w-full bg-gradient-to-r from-ace-violet to-ace-fuchsia py-3 rounded-full font-semibold hover:scale-[1.02] active:scale-95 transition-transform duration-300 disabled:opacity-60 flex items-center justify-center gap-2">
               {creating ? <><Loader2 className="w-5 h-5 animate-spin" /> Building plan...</> : <><Sparkles className="w-4 h-4" /> Generate Plan</>}
             </button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+/* ---------------- Shared doc picker ---------------- */
+function DocSelectList({ docs, selected, toggle }) {
+  return (
+    <div className="space-y-2 max-h-52 overflow-y-auto">
+      {docs.length === 0 && <p className="text-sm text-white/40">No documents in this course yet.</p>}
+      {docs.map((d) => (
+        <button key={d.id} onClick={() => toggle(d.id)} data-testid={`pick-doc-${d.id}`} className={`w-full flex items-center gap-3 p-3 rounded-xl text-sm text-left border transition-colors duration-300 ${selected.includes(d.id) ? "bg-ace-cyan/15 border-ace-cyan" : "bg-white/5 border-white/10"}`}>
+          <div className={`w-4 h-4 rounded grid place-items-center shrink-0 ${selected.includes(d.id) ? "bg-ace-cyan" : "border border-white/30"}`}>
+            {selected.includes(d.id) && <CheckCircle2 className="w-3.5 h-3.5 text-white" />}
+          </div>
+          <span className="truncate">{d.name || d.original_filename}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function GenerateDialog({ open, setOpen, docs, onGenerate, busy, cta, hint, titlePlaceholder }) {
+  const [selected, setSelected] = useState([]);
+  const [title, setTitle] = useState("");
+  const toggle = (id) => setSelected((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id]);
+  return (
+    <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setSelected([]); setTitle(""); } }}>
+      <DialogContent className="glass-strong border-white/10 text-white max-w-lg max-h-[85vh] overflow-y-auto">
+        <DialogHeader><DialogTitle className="font-head">{cta}</DialogTitle></DialogHeader>
+        <div className="space-y-4 mt-2">
+          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={titlePlaceholder} data-testid="gen-title-input" className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm focus:border-ace-violet outline-none" />
+          <div>
+            <p className="text-sm font-semibold mb-2">Select documents</p>
+            <DocSelectList docs={docs} selected={selected} toggle={toggle} />
+          </div>
+          <p className="text-xs text-white/40">{hint}</p>
+          <button onClick={() => onGenerate(selected, title)} disabled={busy} data-testid="gen-submit-btn" className="w-full bg-gradient-to-r from-ace-violet to-ace-fuchsia py-3 rounded-full font-semibold hover:scale-[1.02] active:scale-95 transition-transform duration-300 disabled:opacity-60 flex items-center justify-center gap-2">
+            {busy ? <><Loader2 className="w-5 h-5 animate-spin" /> Generating with AI…</> : <><Sparkles className="w-4 h-4" /> {cta}</>}
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* ---------------- Walkthrough ---------------- */
+function WalkthroughTab({ courseId, docs, navigate }) {
+  const [items, setItems] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const load = () => api.get(`/courses/${courseId}/walkthroughs`).then((r) => setItems(r.data)).catch(() => {});
+  useEffect(() => { load(); }, [courseId]);
+
+  const gen = async (selected, title) => {
+    if (!selected.length) { toast.error("Select at least one document"); return; }
+    setBusy(true);
+    try {
+      const { data } = await api.post(`/courses/${courseId}/walkthrough/generate`, { document_ids: selected, title: title || null });
+      toast.success("Interactive lecture ready!");
+      setOpen(false); load(); navigate(`/walkthrough/${data.id}`);
+    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+    finally { setBusy(false); }
+  };
+  const del = async (id) => { if (!window.confirm("Delete this walkthrough?")) return; await api.delete(`/walkthroughs/${id}`); load(); };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="font-head font-semibold text-lg">Interactive Walkthroughs</h2>
+          <p className="text-sm text-white/40">A fun, guided lecture that teaches your documents step by step.</p>
+        </div>
+        <button onClick={() => setOpen(true)} data-testid="new-walkthrough-btn" disabled={docs.length === 0} className="flex items-center gap-2 bg-gradient-to-r from-ace-violet to-ace-fuchsia px-5 py-2.5 rounded-full font-semibold text-sm hover:scale-105 active:scale-95 transition-transform duration-300 disabled:opacity-40">
+          <Sparkles className="w-4 h-4" /> Build Walkthrough
+        </button>
+      </div>
+      {items.length === 0 ? (
+        <p className="text-center text-white/40 py-6">No walkthroughs yet. Build one and learn interactively!</p>
+      ) : (
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {items.map((w) => {
+            const pct = w.total_steps ? Math.round(((w.progress || 0) / w.total_steps) * 100) : 0;
+            const started = (w.progress || 0) > 0;
+            return (
+              <div key={w.id} className="glass rounded-2xl p-5 flex flex-col gap-3" data-testid={`walkthrough-${w.id}`}>
+                <div className="flex items-center justify-between">
+                  <div className="w-10 h-10 rounded-xl bg-ace-violet/15 grid place-items-center"><Presentation className="w-5 h-5 text-ace-violet" /></div>
+                  <button onClick={() => del(w.id)} data-testid={`delete-walkthrough-${w.id}`} className="text-white/30 hover:text-red-400 transition-colors duration-300 p-1"><Trash2 className="w-4 h-4" /></button>
+                </div>
+                <p className="font-head font-semibold">{w.title}</p>
+                <div className="h-1.5 bg-white/10 rounded-full overflow-hidden"><div className="h-full bg-gradient-to-r from-ace-violet to-ace-fuchsia" style={{ width: `${pct}%` }} /></div>
+                <p className="text-xs text-white/40">{started ? `Resume · step ${(w.progress || 0) + 1} of ${w.total_steps}` : `${w.total_steps} steps`}</p>
+                <button onClick={() => navigate(`/walkthrough/${w.id}`)} data-testid={`open-walkthrough-${w.id}`} className="mt-auto flex items-center justify-center gap-1.5 text-sm bg-gradient-to-r from-ace-violet to-ace-fuchsia rounded-full py-2.5 font-semibold hover:scale-[1.02] active:scale-95 transition-transform duration-300">
+                  <Play className="w-4 h-4" /> {started ? "Continue" : "Start"}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {docs.length === 0 && <p className="text-white/40 text-sm">Upload documents first to build a walkthrough.</p>}
+      <GenerateDialog open={open} setOpen={setOpen} docs={docs} onGenerate={gen} busy={busy} cta="Build Walkthrough" titlePlaceholder="Lecture title (optional)" hint="The AI builds a complete interactive lecture covering everything important — this can take 20-40 seconds." />
+    </div>
+  );
+}
+
+/* ---------------- Study Guide ---------------- */
+function StudyGuideTab({ courseId, docs }) {
+  const [items, setItems] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [viewing, setViewing] = useState(null);
+  const load = () => api.get(`/courses/${courseId}/study-guides`).then((r) => setItems(r.data)).catch(() => {});
+  useEffect(() => { load(); }, [courseId]);
+
+  const gen = async (selected, title) => {
+    if (!selected.length) { toast.error("Select at least one document"); return; }
+    setBusy(true);
+    try {
+      const { data } = await api.post(`/courses/${courseId}/study-guide/generate`, { document_ids: selected, title: title || null });
+      toast.success("Study guide ready!"); setOpen(false); load(); setViewing(data);
+    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+    finally { setBusy(false); }
+  };
+  const del = async (id) => { if (!window.confirm("Delete this study guide?")) return; await api.delete(`/study-guides/${id}`); load(); };
+  const view = async (id) => { const { data } = await api.get(`/study-guides/${id}`); setViewing(data); };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="font-head font-semibold text-lg">Study Guides</h2>
+          <p className="text-sm text-white/40">Detailed, organized guides with a revision checklist.</p>
+        </div>
+        <button onClick={() => setOpen(true)} data-testid="new-guide-btn" disabled={docs.length === 0} className="flex items-center gap-2 bg-gradient-to-r from-ace-violet to-ace-fuchsia px-5 py-2.5 rounded-full font-semibold text-sm hover:scale-105 active:scale-95 transition-transform duration-300 disabled:opacity-40">
+          <Sparkles className="w-4 h-4" /> Generate Guide
+        </button>
+      </div>
+      {items.length === 0 ? (
+        <p className="text-center text-white/40 py-6">No study guides yet. Generate a comprehensive one!</p>
+      ) : (
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {items.map((g) => (
+            <div key={g.id} className="glass rounded-2xl p-5 flex flex-col gap-3" data-testid={`guide-${g.id}`}>
+              <div className="flex items-center justify-between">
+                <div className="w-10 h-10 rounded-xl bg-ace-cyan/15 grid place-items-center"><BookOpen className="w-5 h-5 text-ace-cyan" /></div>
+                <button onClick={() => del(g.id)} data-testid={`delete-guide-${g.id}`} className="text-white/30 hover:text-red-400 transition-colors duration-300 p-1"><Trash2 className="w-4 h-4" /></button>
+              </div>
+              <p className="font-head font-semibold">{g.title}</p>
+              <button onClick={() => view(g.id)} data-testid={`open-guide-${g.id}`} className="mt-auto flex items-center justify-center gap-1.5 text-sm bg-gradient-to-r from-ace-violet to-ace-fuchsia rounded-full py-2.5 font-semibold hover:scale-[1.02] active:scale-95 transition-transform duration-300">
+                <Eye className="w-4 h-4" /> Read Guide
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {docs.length === 0 && <p className="text-white/40 text-sm">Upload documents first to generate a study guide.</p>}
+      <GenerateDialog open={open} setOpen={setOpen} docs={docs} onGenerate={gen} busy={busy} cta="Generate Guide" titlePlaceholder="Guide title (optional)" hint="The AI writes a detailed, comprehensive guide — this can take 20-40 seconds." />
+      <StudyGuideViewer guide={viewing} onClose={() => setViewing(null)} />
+    </div>
+  );
+}
+
+function StudyGuideViewer({ guide, onClose }) {
+  const [checkState, setCheckState] = useState({});
+  useEffect(() => { if (guide) setCheckState(guide.checklist_state || {}); }, [guide]);
+  const toggle = (i) => {
+    const next = { ...checkState, [i]: !checkState[i] };
+    setCheckState(next);
+    if (guide) api.patch(`/study-guides/${guide.id}/checklist`, { checklist_state: next }).catch(() => {});
+  };
+  const ci = { i: 0 };
+  const checkbox = { state: checkState, next: () => ci.i++, onToggle: toggle };
+  return (
+    <Dialog open={!!guide} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="glass-strong border-white/10 text-white max-w-3xl max-h-[88vh] overflow-hidden flex flex-col">
+        <DialogHeader><DialogTitle className="font-head pr-6">{guide?.title}</DialogTitle></DialogHeader>
+        <div className="overflow-y-auto mt-2 pr-2" data-testid="guide-content">
+          {guide && <RichText content={guide.content} checkbox={checkbox} />}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* ---------------- Key Terms ---------------- */
+function KeyTermsTab({ courseId, docs }) {
+  const [items, setItems] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [viewing, setViewing] = useState(null);
+  const load = () => api.get(`/courses/${courseId}/key-terms`).then((r) => setItems(r.data)).catch(() => {});
+  useEffect(() => { load(); }, [courseId]);
+
+  const gen = async (selected, title) => {
+    if (!selected.length) { toast.error("Select at least one document"); return; }
+    setBusy(true);
+    try {
+      const { data } = await api.post(`/courses/${courseId}/key-terms/generate`, { document_ids: selected, title: title || null });
+      toast.success("Key terms ready!"); setOpen(false); load(); setViewing(data);
+    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+    finally { setBusy(false); }
+  };
+  const del = async (id) => { if (!window.confirm("Delete this key term set?")) return; await api.delete(`/key-terms/${id}`); load(); };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="font-head font-semibold text-lg">Key Terms & Definitions</h2>
+          <p className="text-sm text-white/40">Important terms scanned from your documents, sorted A→Z.</p>
+        </div>
+        <button onClick={() => setOpen(true)} data-testid="new-terms-btn" disabled={docs.length === 0} className="flex items-center gap-2 bg-gradient-to-r from-ace-violet to-ace-fuchsia px-5 py-2.5 rounded-full font-semibold text-sm hover:scale-105 active:scale-95 transition-transform duration-300 disabled:opacity-40">
+          <Sparkles className="w-4 h-4" /> Extract Terms
+        </button>
+      </div>
+      {items.length === 0 ? (
+        <p className="text-center text-white/40 py-6">No key term sets yet. Extract them from your documents!</p>
+      ) : (
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {items.map((k) => (
+            <div key={k.id} className="glass rounded-2xl p-5 flex flex-col gap-3" data-testid={`terms-${k.id}`}>
+              <div className="flex items-center justify-between">
+                <div className="w-10 h-10 rounded-xl bg-ace-fuchsia/15 grid place-items-center"><Library className="w-5 h-5 text-ace-fuchsia" /></div>
+                <button onClick={() => del(k.id)} data-testid={`delete-terms-${k.id}`} className="text-white/30 hover:text-red-400 transition-colors duration-300 p-1"><Trash2 className="w-4 h-4" /></button>
+              </div>
+              <p className="font-head font-semibold">{k.title}</p>
+              <p className="text-xs text-white/40">{(k.terms || []).length} terms</p>
+              <button onClick={() => setViewing(k)} data-testid={`open-terms-${k.id}`} className="mt-auto flex items-center justify-center gap-1.5 text-sm bg-gradient-to-r from-ace-violet to-ace-fuchsia rounded-full py-2.5 font-semibold hover:scale-[1.02] active:scale-95 transition-transform duration-300">
+                <Eye className="w-4 h-4" /> View Terms
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {docs.length === 0 && <p className="text-white/40 text-sm">Upload documents first to extract key terms.</p>}
+      <GenerateDialog open={open} setOpen={setOpen} docs={docs} onGenerate={gen} busy={busy} cta="Extract Terms" titlePlaceholder="Set title (optional)" hint="The AI scans thoroughly for the most important terms — this can take 15-30 seconds." />
+      <Dialog open={!!viewing} onOpenChange={(o) => !o && setViewing(null)}>
+        <DialogContent className="glass-strong border-white/10 text-white max-w-2xl max-h-[88vh] overflow-hidden flex flex-col">
+          <DialogHeader><DialogTitle className="font-head pr-6">{viewing?.title}</DialogTitle></DialogHeader>
+          <div className="overflow-y-auto mt-2 space-y-3 pr-2" data-testid="terms-list">
+            {(viewing?.terms || []).map((t, i) => (
+              <div key={i} className="glass rounded-xl p-4" data-testid={`term-${i}`}>
+                <p className="font-head font-semibold text-ace-cyan">{t.term}</p>
+                <div className="text-sm text-white/75 mt-1"><RichText content={t.definition} /></div>
+                {t.source && <p className="text-xs text-ace-violet mt-2 flex items-center gap-1.5"><BookOpen className="w-3.5 h-3.5" /> {t.source}</p>}
+              </div>
+            ))}
           </div>
         </DialogContent>
       </Dialog>
