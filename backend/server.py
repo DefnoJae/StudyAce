@@ -24,11 +24,27 @@ from pydantic import BaseModel, EmailStr, Field
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-mongo_url = os.environ['MONGO_URL']
+mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
+db_name = os.environ.get('DB_NAME', 'studyace')
 client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+db = client[db_name]
 
 app = FastAPI()
+
+# ---------------- CORS Configuration ----------------
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://study-ace-khaki.vercel.app",
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "*"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 api_router = APIRouter(prefix="/api")
 
 JWT_ALGORITHM = "HS256"
@@ -44,13 +60,22 @@ def init_storage(force: bool = False):
     global storage_key
     if storage_key and not force:
         return storage_key
-    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
-    resp.raise_for_status()
-    storage_key = resp.json()["storage_key"]
-    return storage_key
+    if not EMERGENT_KEY:
+        logger.warning("EMERGENT_LLM_KEY is not set. Storage initialization skipped.")
+        return None
+    try:
+        resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
+        resp.raise_for_status()
+        storage_key = resp.json()["storage_key"]
+        return storage_key
+    except Exception as e:
+        logger.error(f"Storage init failed: {e}")
+        return None
 
 def put_object(path: str, data: bytes, content_type: str) -> dict:
     key = init_storage()
+    if not key:
+        raise HTTPException(status_code=500, detail="Object storage key unavailable.")
     resp = requests.put(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key, "Content-Type": content_type}, data=data, timeout=120)
     if resp.status_code == 404:
         key = init_storage(force=True)
@@ -60,6 +85,8 @@ def put_object(path: str, data: bytes, content_type: str) -> dict:
 
 def get_object(path: str):
     key = init_storage()
+    if not key:
+        raise HTTPException(status_code=500, detail="Object storage key unavailable.")
     resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
     if resp.status_code == 404:
         key = init_storage(force=True)
@@ -102,7 +129,7 @@ def verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
 
 def get_jwt_secret() -> str:
-    return os.environ["JWT_SECRET"]
+    return os.environ.get("JWT_SECRET", "fallback-secret-change-me")
 
 def create_access_token(user_id: str, email: str) -> str:
     payload = {"sub": user_id, "email": email, "exp": datetime.now(timezone.utc) + timedelta(days=7), "type": "access"}
@@ -625,347 +652,21 @@ async def parse_schedule_file(course_id: str, kind: str = Form("syllabus"), file
             import base64 as _b64
             files = [FileContent(file.content_type or "application/pdf", _b64.b64encode(data).decode("utf-8"))]
         except Exception as e:
-            logger.error(f"schedule attach failed: {e}")
-    if kind == "timetable":
-        instr = "This file is a student's weekly timetable/schedule (it may be a table, image or PDF). Read it carefully and produce a concise, clean summary of which days and time blocks are BUSY (classes, labs, work, commitments) and which time blocks are FREE for studying each day. Use short lines per day."
-    else:
-        instr = "This file is a course syllabus. Extract a clean, organized list of ALL topics/units/chapters to be covered, and note any exam/assessment dates mentioned. Use short bullet lines grouped sensibly."
-    prompt = f"{instr}\n\nExtracted text (may be empty for scanned/image files — rely on the attached file if so):\n{text[:20000]}"
+            logger.error(f"Schedule file attachment failed: {e}")
+            
+    system = "You are an expert academic organizer. Extract structured information from study schedules, timetables, or syllabi."
+    prompt = f"Extract all topics, key dates, or timetable schedules from this uploaded {kind} file:\n\n{text[:100000]}"
     try:
-        parsed = await llm_generate("You extract study scheduling and syllabus information accurately and concisely.", prompt, file_contents=files)
-        parsed = norm_frac(parsed)
+        extracted = await llm_generate(system, prompt, file_contents=files)
     except Exception as e:
-        logger.error(f"schedule parse failed: {e}")
-        raise HTTPException(status_code=500, detail="AI could not read that file. Please try another file.")
-    label = "Timetable" if kind == "timetable" else "Syllabus"
-    doc = {"id": str(uuid.uuid4()), "user_id": user["id"], "course_id": course_id,
-           "storage_path": result["path"], "original_filename": file.filename,
-           "name": f"{label}: {file.filename}", "suggested_name": f"{label}: {file.filename}",
-           "content_type": file.content_type, "ext": ext, "size": result.get("size", len(data)),
-           "kind": kind, "text": text[:200000], "is_deleted": False, "created_at": now_iso()}
-    await db.documents.insert_one(doc)
-    return {"kind": kind, "filename": file.filename, "text": parsed, "doc_id": doc["id"]}
+        logger.error(f"parse schedule file failed: {e}")
+        extracted = text[:2000]
 
+    return {"filename": file.filename, "extracted_text": extracted}
 
-# ---------------- Interactive Walkthrough ----------------
-class GenFromDocsInput(BaseModel):
-    document_ids: List[str]
-    title: Optional[str] = None
-
-class ProgressInput(BaseModel):
-    current_index: int
-
-@api_router.post("/courses/{course_id}/walkthrough/generate")
-async def generate_walkthrough(course_id: str, data: GenFromDocsInput, user: dict = Depends(get_current_user)):
-    course = await db.courses.find_one({"id": course_id, "user_id": user["id"]})
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
-    material, files, docs = await fetch_doc_materials(data.document_ids, user["id"])
-    if not docs:
-        raise HTTPException(status_code=400, detail="No documents selected")
-    system = "You are an outstanding, engaging university lecturer creating an interactive lecture. You respond ONLY with valid JSON (no markdown fences).\n\n" + FORMAT_RULES
-    prompt = f"""Build a COMPLETE, interactive walkthrough lecture from the attached/selected study documents (read their words, formulas, diagrams and pictures). Teach it so a student who has NEVER read the material will truly understand it.
-
-RULES:
-- Be COMPREHENSIVE. Cover everything important AND semi-important. Do NOT summarize or shorten to save space — make as many steps as the material needs (a rich document may need 20-40+ steps). Judge from the amount of content provided.
-- One idea per step so the screen is never crowded. Progressive: build concepts up.
-- Mix step types: explain concepts simply, give real-world analogies/applications, work out example problems with step-by-step solutions, and ask the student a question (with its answer) to check understanding.
-- Every step's "source" MUST cite the document name and the page/slide/section it is drawn from.
-- Use the FORMATTING RULES for all "content" fields (clean prose, Unicode math, [[frac:a|b]] for fractions, [[center:...]] for display equations).
-
-Return ONLY JSON:
-{{"title": "lecture title", "intro": "1-2 sentence hook of what they'll learn", "steps": [
-  {{"type": "concept" | "example" | "realworld" | "question", "heading": "short heading", "content": "the teaching content in clean markdown", "source": "DocumentName — page/slide X", "question": "only if type=question", "answer": "only if type=question"}}
-]}}"""
-    try:
-        raw = await llm_generate(system, prompt, file_contents=files)
-        parsed = parse_json_block(raw)
-    except Exception as e:
-        logger.error(f"walkthrough failed: {e}")
-        raise HTTPException(status_code=500, detail="AI walkthrough generation failed. Please try again.")
-    doc = {"id": str(uuid.uuid4()), "user_id": user["id"], "course_id": course_id,
-           "title": data.title or parsed.get("title") or "Interactive Walkthrough",
-           "intro": norm_frac(parsed.get("intro", "")), "steps": sanitize_obj(parsed.get("steps", [])),
-           "document_ids": data.document_ids, "progress": 0, "created_at": now_iso()}
-    await db.walkthroughs.insert_one(doc)
-    doc.pop("_id", None)
-    return doc
-
-@api_router.get("/courses/{course_id}/walkthroughs")
-async def list_walkthroughs(course_id: str, user: dict = Depends(get_current_user)):
-    items = await db.walkthroughs.find({"course_id": course_id, "user_id": user["id"]}, {"_id": 0, "steps": 0}).sort("created_at", -1).to_list(200)
-    for it in items:
-        w = await db.walkthroughs.find_one({"id": it["id"]}, {"_id": 0, "steps": 1})
-        it["total_steps"] = len(w.get("steps", []))
-    return items
-
-@api_router.get("/walkthroughs/{wid}")
-async def get_walkthrough(wid: str, user: dict = Depends(get_current_user)):
-    w = await db.walkthroughs.find_one({"id": wid, "user_id": user["id"]}, {"_id": 0})
-    if not w:
-        raise HTTPException(status_code=404, detail="Walkthrough not found")
-    return w
-
-@api_router.patch("/walkthroughs/{wid}/progress")
-async def update_walkthrough_progress(wid: str, data: ProgressInput, user: dict = Depends(get_current_user)):
-    await db.walkthroughs.update_one({"id": wid, "user_id": user["id"]}, {"$set": {"progress": data.current_index}})
-    return {"ok": True}
-
-@api_router.delete("/walkthroughs/{wid}")
-async def delete_walkthrough(wid: str, user: dict = Depends(get_current_user)):
-    await db.walkthroughs.delete_one({"id": wid, "user_id": user["id"]})
-    return {"ok": True}
-
-# ---------------- Study Guide ----------------
-@api_router.post("/courses/{course_id}/study-guide/generate")
-async def generate_study_guide(course_id: str, data: GenFromDocsInput, user: dict = Depends(get_current_user)):
-    course = await db.courses.find_one({"id": course_id, "user_id": user["id"]})
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
-    material, files, docs = await fetch_doc_materials(data.document_ids, user["id"])
-    if not docs:
-        raise HTTPException(status_code=400, detail="No documents selected")
-    system = "You are an expert study-guide author. You write beautifully organized, comprehensive study guides in clean Markdown.\n\n" + FORMAT_RULES
-    prompt = f"""Write a DETAILED, well-organized study guide from the attached/selected documents (read words, formulas, diagrams and pictures). Be comprehensive — cover all important and semi-important material; do not over-shorten.
-
-Structure with ## sections and ### sub-sections, **bold** key terms, bullet points, worked examples, and clearly formatted equations (Unicode symbols, [[frac:a|b]] for fractions, [[center:...]] for display equations). Where useful, reference the source document/page.
-
-END the guide with a section titled exactly:
-## Quiz Revision Checklist
-Then list the key things the student must be able to do, each on its own line starting with "- [ ] " (an empty markdown checkbox) so they can tick them off.
-
-Return the study guide as MARKDOWN text only (no JSON, no code fences)."""
-    try:
-        content = await llm_generate(system, prompt, file_contents=files)
-    except Exception as e:
-        logger.error(f"study guide failed: {e}")
-        raise HTTPException(status_code=500, detail="AI study guide generation failed. Please try again.")
-    doc = {"id": str(uuid.uuid4()), "user_id": user["id"], "course_id": course_id,
-           "title": data.title or f"{course['name']} Study Guide",
-           "content": norm_frac(content), "document_ids": data.document_ids,
-           "checklist_state": {}, "created_at": now_iso()}
-    await db.study_guides.insert_one(doc)
-    doc.pop("_id", None)
-    return doc
-
-@api_router.get("/courses/{course_id}/study-guides")
-async def list_study_guides(course_id: str, user: dict = Depends(get_current_user)):
-    items = await db.study_guides.find({"course_id": course_id, "user_id": user["id"]}, {"_id": 0, "content": 0}).sort("created_at", -1).to_list(200)
-    return items
-
-@api_router.get("/study-guides/{gid}")
-async def get_study_guide(gid: str, user: dict = Depends(get_current_user)):
-    g = await db.study_guides.find_one({"id": gid, "user_id": user["id"]}, {"_id": 0})
-    if not g:
-        raise HTTPException(status_code=404, detail="Study guide not found")
-    return g
-
-@api_router.patch("/study-guides/{gid}/checklist")
-async def update_guide_checklist(gid: str, data: dict, user: dict = Depends(get_current_user)):
-    await db.study_guides.update_one({"id": gid, "user_id": user["id"]}, {"$set": {"checklist_state": data.get("checklist_state", {})}})
-    return {"ok": True}
-
-@api_router.delete("/study-guides/{gid}")
-async def delete_study_guide(gid: str, user: dict = Depends(get_current_user)):
-    await db.study_guides.delete_one({"id": gid, "user_id": user["id"]})
-    return {"ok": True}
-
-# ---------------- Key Terms ----------------
-@api_router.post("/courses/{course_id}/key-terms/generate")
-async def generate_key_terms(course_id: str, data: GenFromDocsInput, user: dict = Depends(get_current_user)):
-    course = await db.courses.find_one({"id": course_id, "user_id": user["id"]})
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
-    material, files, docs = await fetch_doc_materials(data.document_ids, user["id"])
-    if not docs:
-        raise HTTPException(status_code=400, detail="No documents selected")
-    system = "You extract key terminology from study material. You respond ONLY with valid JSON (no markdown fences).\n\n" + FORMAT_RULES
-    prompt = f"""Scan the attached/selected documents THOROUGHLY (words, formulas, diagrams, pictures) and extract the MOST IMPORTANT terms, concepts, and vocabulary a student must know. Be comprehensive.
-
-For each: a clear, student-friendly definition. Use clean formatting in definitions (Unicode math, [[frac:a|b]] for fractions). Sort the list ALPHABETICALLY by term (case-insensitive).
-
-Return ONLY JSON: {{"terms": [{{"term": "Term", "definition": "clear definition", "source": "DocumentName — page/slide"}}]}}"""
-    try:
-        raw = await llm_generate(system, prompt, file_contents=files)
-        parsed = parse_json_block(raw)
-        terms = parsed.get("terms", parsed) if isinstance(parsed, dict) else parsed
-        terms = sanitize_obj(terms)
-        terms = sorted(terms, key=lambda t: (t.get("term", "").lower()))
-    except Exception as e:
-        logger.error(f"key terms failed: {e}")
-        raise HTTPException(status_code=500, detail="AI key term generation failed. Please try again.")
-    doc = {"id": str(uuid.uuid4()), "user_id": user["id"], "course_id": course_id,
-           "title": data.title or "Key Terms", "terms": terms,
-           "document_ids": data.document_ids, "created_at": now_iso()}
-    await db.key_terms.insert_one(doc)
-    doc.pop("_id", None)
-    return doc
-
-@api_router.get("/courses/{course_id}/key-terms")
-async def list_key_terms(course_id: str, user: dict = Depends(get_current_user)):
-    items = await db.key_terms.find({"course_id": course_id, "user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(200)
-    return items
-
-@api_router.delete("/key-terms/{kid}")
-async def delete_key_terms(kid: str, user: dict = Depends(get_current_user)):
-    await db.key_terms.delete_one({"id": kid, "user_id": user["id"]})
-    return {"ok": True}
-
-
-# ---------------- Paper Grader ----------------
-@api_router.post("/paper-grader/grade")
-async def grade_paper(paper: UploadFile = File(...), rubric: UploadFile = File(None),
-                      rubric_text: str = Form(""), title: str = Form(""), previous_id: str = Form(""),
-                      user: dict = Depends(get_current_user)):
-    p_ext = paper.filename.split(".")[-1].lower() if "." in paper.filename else "bin"
-    p_data = await paper.read()
-    p_text = extract_text(p_data, p_ext)
-    files = []
-    try:
-        from emergentintegrations.llm.chat import FileContent
-        import base64 as _b64
-        if p_ext in ATTACH_EXTS:
-            files.append(FileContent(paper.content_type or "application/pdf", _b64.b64encode(p_data).decode("utf-8")))
-        rub = (rubric_text or "").strip()
-        r_name = None
-        if rubric is not None:
-            r_data = await rubric.read()
-            r_ext = rubric.filename.split(".")[-1].lower() if "." in rubric.filename else "bin"
-            rt = extract_text(r_data, r_ext)
-            rub = (rub + "\n" + rt).strip()
-            r_name = rubric.filename
-            if r_ext in ATTACH_EXTS and len(files) < 4:
-                files.append(FileContent(rubric.content_type or "application/pdf", _b64.b64encode(r_data).decode("utf-8")))
-    except Exception as e:
-        logger.error(f"paper attach failed: {e}")
-        rub = (rubric_text or "").strip()
-        r_name = rubric.filename if rubric is not None else None
-    rubric_line = f"RUBRIC:\n{rub[:15000]}" if rub else "No rubric was provided — grade using sensible academic criteria."
-    system = "You are a fair but rigorous academic grader. You respond ONLY with valid JSON (no markdown fences).\n\n" + FORMAT_RULES
-    prompt = f"""Grade the student's paper against the rubric (documents may be attached as files — read words, formulas, tables and figures).
-ALWAYS include these three core criteria in addition to any rubric-specific criteria: "Comprehension", "Structure", and "Scientific Accuracy".
-For EACH criterion give: a score from 0 to 10 (10 = perfect / fully meets the rubric), a 'did_well' note (specific strengths, reference parts of the paper), and an 'improve' note (specific, actionable steps needed to reach a perfect 10/10). Be honest, specific and constructive.
-
-Return ONLY JSON:
-{{"summary": "2-3 sentence overall assessment", "criteria": [{{"name": str, "score": number, "did_well": str, "improve": str}}]}}
-
-{rubric_line}
-
-STUDENT PAPER ({paper.filename}):
-{p_text[:80000]}"""
-    try:
-        raw = await llm_generate(system, prompt, file_contents=files)
-        parsed = sanitize_obj(parse_json_block(raw))
-    except Exception as e:
-        logger.error(f"paper grading failed: {e}")
-        raise HTTPException(status_code=500, detail="AI grading failed. Please try again with a clearer file.")
-    criteria = parsed.get("criteria", []) if isinstance(parsed, dict) else []
-    for c in criteria:
-        try:
-            c["score"] = max(0.0, min(10.0, round(float(c.get("score", 0)), 1)))
-        except Exception:
-            c["score"] = 0.0
-    total = sum(c["score"] for c in criteria)
-    overall = round(100 * total / (10 * len(criteria))) if criteria else 0
-    perfect = bool(criteria) and all(c["score"] >= 10 for c in criteria)
-    attempt = 1
-    if previous_id:
-        prev = await db.paper_grades.find_one({"id": previous_id, "user_id": user["id"]})
-        if prev:
-            attempt = prev.get("attempt", 1) + 1
-    rec = {"id": str(uuid.uuid4()), "user_id": user["id"], "title": title or paper.filename,
-           "paper_filename": paper.filename, "rubric_name": r_name, "rubric_provided": bool(rub),
-           "summary": parsed.get("summary", "") if isinstance(parsed, dict) else "",
-           "criteria": criteria, "overall_percentage": overall, "perfect": perfect,
-           "previous_id": previous_id or None, "attempt": attempt, "created_at": now_iso()}
-    await db.paper_grades.insert_one(rec)
-    rec.pop("_id", None)
-    return rec
-
-@api_router.get("/paper-grader")
-async def list_paper_grades(user: dict = Depends(get_current_user)):
-    items = await db.paper_grades.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(200)
-    return items
-
-@api_router.get("/paper-grader/{gid}")
-async def get_paper_grade(gid: str, user: dict = Depends(get_current_user)):
-    g = await db.paper_grades.find_one({"id": gid, "user_id": user["id"]}, {"_id": 0})
-    if not g:
-        raise HTTPException(status_code=404, detail="Grade not found")
-    return g
-
-@api_router.delete("/paper-grader/{gid}")
-async def delete_paper_grade(gid: str, user: dict = Depends(get_current_user)):
-    await db.paper_grades.delete_one({"id": gid, "user_id": user["id"]})
-    return {"ok": True}
-
-
-# ---------------- Dashboard ----------------
-@api_router.get("/dashboard")
-async def dashboard(user: dict = Depends(get_current_user)):
-    uid = user["id"]
-    courses = await db.courses.count_documents({"user_id": uid, "archived": {"$ne": True}})
-    docs = await db.documents.count_documents({"user_id": uid, "is_deleted": False})
-    quizzes = await db.quizzes.find({"user_id": uid}, {"_id": 0, "questions": 0}).to_list(1000)
-    total_attempts = 0
-    scores = []
-    weak = {}
-    for q in quizzes:
-        for a in q.get("attempts", []):
-            total_attempts += 1
-            scores.append(a["score"])
-            for w in a.get("weak", []):
-                weak[w] = weak.get(w, 0) + 1
-    avg = round(sum(scores) / len(scores)) if scores else 0
-    weak_areas = sorted(weak.items(), key=lambda x: -x[1])[:5]
-    # upcoming exams
-    plans = await db.study_plans.find({"user_id": uid}, {"_id": 0}).to_list(100)
-    upcoming = sorted([{"exam_name": p["exam_name"], "exam_date": p["exam_date"], "course_id": p["course_id"]} for p in plans], key=lambda x: x["exam_date"])
-    return {"courses": courses, "documents": docs, "quizzes": len(quizzes), "attempts": total_attempts,
-            "avg_score": avg, "weak_areas": [{"question": w[0], "misses": w[1]} for w in weak_areas],
-            "upcoming_exams": upcoming[:5],
-            "recent_quizzes": sorted(quizzes, key=lambda x: x["created_at"], reverse=True)[:5]}
-
+# Include router and add health route
 app.include_router(api_router)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=[os.environ.get("FRONTEND_URL", "http://localhost:3000"), "http://localhost:3000"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-@app.on_event("startup")
-async def startup():
-    try:
-        await db.users.create_index("email", unique=True)
-    except Exception as e:
-        logger.warning(f"index: {e}")
-    admin_email = os.environ.get("ADMIN_EMAIL", "admin@studyace.app")
-    admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
-    existing = await db.users.find_one({"email": admin_email})
-    if existing is None:
-        await db.users.insert_one({"name": "Admin", "email": admin_email, "password_hash": hash_password(admin_password), "role": "admin", "created_at": now_iso(), "prefs": {"daily_hours": 2}})
-    elif not verify_password(admin_password, existing["password_hash"]):
-        await db.users.update_one({"email": admin_email}, {"$set": {"password_hash": hash_password(admin_password)}})
-    try:
-        init_storage()
-        logger.info("Storage initialized")
-    except Exception as e:
-        logger.error(f"Storage init failed: {e}")
-
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
-
-
-import os
-from fastapi.staticfiles import StaticFiles
-
-if os.path.exists("static"):
-    app.mount("/", StaticFiles(directory="static", html=True), name="static")
-
-@app.get("/")
-async def root():
-    return {"status": "online", "message": "StudyAce API is running!"}
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
