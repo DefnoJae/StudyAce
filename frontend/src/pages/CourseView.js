@@ -531,6 +531,26 @@ function PlanTab({ courseId, plans, reload }) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ exam_name: "", exam_date: "", daily_hours: 2, topics: "", timetable: "", syllabus: "" });
   const [creating, setCreating] = useState(false);
+  const [uploading, setUploading] = useState({ syllabus: false, timetable: false });
+  const [files, setFiles] = useState({ syllabus: "", timetable: "" });
+  const sylRef = useRef();
+  const ttRef = useRef();
+
+  const uploadSchedule = async (kind, file) => {
+    if (!file) return;
+    setUploading((u) => ({ ...u, [kind]: true }));
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("kind", kind);
+      const { data } = await api.post(`/courses/${courseId}/schedule-file`, fd, { headers: { "Content-Type": "multipart/form-data" } });
+      setForm((f) => ({ ...f, [kind]: data.text }));
+      setFiles((s) => ({ ...s, [kind]: data.filename }));
+      toast.success(`${kind === "timetable" ? "Timetable" : "Syllabus"} read by AI ✨`);
+      reload();
+    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+    finally { setUploading((u) => ({ ...u, [kind]: false })); }
+  };
 
   const create = async () => {
     if (!form.exam_name || !form.exam_date) { toast.error("Add exam name and date"); return; }
@@ -606,8 +626,25 @@ function PlanTab({ courseId, plans, reload }) {
                 <input type="number" min="0.5" step="0.5" value={form.daily_hours} onChange={(e) => setForm({ ...form, daily_hours: e.target.value })} data-testid="plan-hours" className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm focus:border-ace-violet outline-none" />
               </div>
             </div>
-            <Txt label="Topics to cover" value={form.topics} onChange={(v) => setForm({ ...form, topics: v })} testid="plan-topics" placeholder="List syllabus topics for this exam" />
-            <Txt label="Your weekly timetable / busy times (optional)" value={form.timetable} onChange={(v) => setForm({ ...form, timetable: v })} testid="plan-timetable" placeholder="e.g. Classes Mon-Fri 9-3, work Sat" />
+            <Txt label="Topics to cover" value={form.topics} onChange={(v) => setForm({ ...form, topics: v })} testid="plan-topics" placeholder="List topics, or upload a syllabus below to auto-fill" />
+
+            <ScheduleUpload
+              label="Syllabus" hint="Upload a syllabus (PDF/DOCX/image) — AI extracts the topics"
+              fileName={files.syllabus} uploading={uploading.syllabus}
+              onPick={() => sylRef.current?.click()}
+              inputRef={sylRef} onFile={(f) => uploadSchedule("syllabus", f)}
+              value={form.syllabus} onChange={(v) => setForm({ ...form, syllabus: v })}
+              testid="syllabus" placeholder="AI-extracted syllabus topics will appear here (editable)"
+            />
+            <ScheduleUpload
+              label="Timetable" hint="Upload your timetable (PDF/image) — AI finds your free study time"
+              fileName={files.timetable} uploading={uploading.timetable}
+              onPick={() => ttRef.current?.click()}
+              inputRef={ttRef} onFile={(f) => uploadSchedule("timetable", f)}
+              value={form.timetable} onChange={(v) => setForm({ ...form, timetable: v })}
+              testid="timetable" placeholder="e.g. Classes Mon-Fri 9-3, work Sat (or upload a file)"
+            />
+
             <button onClick={create} disabled={creating} data-testid="create-plan-submit" className="w-full bg-gradient-to-r from-ace-violet to-ace-fuchsia py-3 rounded-full font-semibold hover:scale-[1.02] active:scale-95 transition-transform duration-300 disabled:opacity-60 flex items-center justify-center gap-2">
               {creating ? <><Loader2 className="w-5 h-5 animate-spin" /> Building plan...</> : <><Sparkles className="w-4 h-4" /> Generate Plan</>}
             </button>
@@ -865,6 +902,23 @@ function KeyTermsTab({ courseId, docs }) {
           </div>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+function ScheduleUpload({ label, hint, fileName, uploading, onPick, inputRef, onFile, value, onChange, testid, placeholder }) {
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1.5">
+        <p className="text-sm font-semibold">{label} <span className="text-white/30 font-normal">(optional)</span></p>
+        <button type="button" onClick={onPick} disabled={uploading} data-testid={`upload-${testid}-btn`} className="flex items-center gap-1.5 text-xs bg-ace-violet/20 hover:bg-ace-violet/30 text-white rounded-full px-3 py-1.5 transition-colors duration-300 disabled:opacity-60">
+          {uploading ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Reading…</> : <><Upload className="w-3.5 h-3.5" /> Upload file</>}
+        </button>
+      </div>
+      <input ref={inputRef} type="file" hidden accept=".pdf,.docx,.pptx,.txt,.png,.jpg,.jpeg,.webp" data-testid={`upload-${testid}-input`} onChange={(e) => { onFile(e.target.files?.[0]); e.target.value = ""; }} />
+      <p className="text-xs text-white/40 mb-1.5">{hint}</p>
+      {fileName && <p className="text-xs text-ace-cyan mb-1.5 flex items-center gap-1"><FileText className="w-3.5 h-3.5" /> {fileName}</p>}
+      <textarea value={value} onChange={(e) => onChange(e.target.value)} data-testid={`plan-${testid}`} placeholder={placeholder} rows={3} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm focus:border-ace-violet outline-none resize-none" />
     </div>
   );
 }

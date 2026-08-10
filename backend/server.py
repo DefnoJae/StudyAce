@@ -608,6 +608,45 @@ async def delete_plan(plan_id: str, user: dict = Depends(get_current_user)):
     await db.study_plans.delete_one({"id": plan_id, "user_id": user["id"]})
     return {"ok": True}
 
+@api_router.post("/courses/{course_id}/schedule-file")
+async def parse_schedule_file(course_id: str, kind: str = Form("syllabus"), file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    course = await db.courses.find_one({"id": course_id, "user_id": user["id"]})
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    ext = file.filename.split(".")[-1].lower() if "." in file.filename else "bin"
+    data = await file.read()
+    path = f"{APP_NAME}/uploads/{user['id']}/{uuid.uuid4()}.{ext}"
+    result = put_object(path, data, file.content_type or "application/octet-stream")
+    text = extract_text(data, ext)
+    files = []
+    if ext in ATTACH_EXTS:
+        try:
+            from emergentintegrations.llm.chat import FileContent
+            import base64 as _b64
+            files = [FileContent(file.content_type or "application/pdf", _b64.b64encode(data).decode("utf-8"))]
+        except Exception as e:
+            logger.error(f"schedule attach failed: {e}")
+    if kind == "timetable":
+        instr = "This file is a student's weekly timetable/schedule (it may be a table, image or PDF). Read it carefully and produce a concise, clean summary of which days and time blocks are BUSY (classes, labs, work, commitments) and which time blocks are FREE for studying each day. Use short lines per day."
+    else:
+        instr = "This file is a course syllabus. Extract a clean, organized list of ALL topics/units/chapters to be covered, and note any exam/assessment dates mentioned. Use short bullet lines grouped sensibly."
+    prompt = f"{instr}\n\nExtracted text (may be empty for scanned/image files — rely on the attached file if so):\n{text[:20000]}"
+    try:
+        parsed = await llm_generate("You extract study scheduling and syllabus information accurately and concisely.", prompt, file_contents=files)
+        parsed = norm_frac(parsed)
+    except Exception as e:
+        logger.error(f"schedule parse failed: {e}")
+        raise HTTPException(status_code=500, detail="AI could not read that file. Please try another file.")
+    label = "Timetable" if kind == "timetable" else "Syllabus"
+    doc = {"id": str(uuid.uuid4()), "user_id": user["id"], "course_id": course_id,
+           "storage_path": result["path"], "original_filename": file.filename,
+           "name": f"{label}: {file.filename}", "suggested_name": f"{label}: {file.filename}",
+           "content_type": file.content_type, "ext": ext, "size": result.get("size", len(data)),
+           "kind": kind, "text": text[:200000], "is_deleted": False, "created_at": now_iso()}
+    await db.documents.insert_one(doc)
+    return {"kind": kind, "filename": file.filename, "text": parsed, "doc_id": doc["id"]}
+
+
 # ---------------- Interactive Walkthrough ----------------
 class GenFromDocsInput(BaseModel):
     document_ids: List[str]
