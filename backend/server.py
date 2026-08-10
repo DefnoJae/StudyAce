@@ -187,7 +187,7 @@ FORMAT_RULES = """FORMATTING RULES (very important, follow exactly):
 - Write clean, readable prose in Markdown. Use ## for main headings, ### for sub-headings, and **bold** for key terms/labels. Use short paragraphs, bullet lists, and leave a blank line between sections. Maintain clear visual hierarchy.
 - NEVER use LaTeX, dollar signs ($), or backslash math commands (no \\frac, \\times, \\div, etc.). NEVER output raw #, ##, ### as literal text mid-sentence.
 - Use REAL Unicode math symbols: × (multiply), ÷ (divide), − (minus), ± ≤ ≥ ≠ ≈ √ ∑ ∫ ∆ π θ ° → ∞, and superscripts/subscripts like x², xⁿ, H₂O.
-- For a stacked fraction (numerator on top, denominator on bottom) write EXACTLY [[frac:NUMERATOR|DENOMINATOR]] — e.g. [[frac:a + b|2c]]. For simple values you may use ½, ¾. Put display equations centered on their own line using [[center:...]].
+- For a stacked fraction (numerator on top, denominator on bottom) write EXACTLY [[frac:NUMERATOR|DENOMINATOR]] — e.g. [[frac:a + b|2c]]. Write ONE well-formed token per fraction: never add extra brackets and never put text after the closing ]]. WRONG: [[frac:1|2]]mv²]]  →  RIGHT: [[frac:mv²|2]] (or ½mv²). WRONG: [[frac:∆s|∆t]]]]  →  RIGHT: [[frac:∆s|∆t]]. For simple values you may use ½, ¾. Put display equations centered on their own line using [[center:...]].
 - Keep the screen uncluttered and the text naturally formatted, like a great textbook."""
 
 ATTACH_EXTS = ("pdf", "png", "jpg", "jpeg", "webp", "gif")
@@ -233,6 +233,21 @@ def parse_json_block(text: str):
     if start != -1 and end != -1:
         t = t[start:end + 1]
     return json.loads(t)
+
+import re as _re
+def norm_frac(s):
+    if not isinstance(s, str):
+        return s
+    return _re.sub(r'\]{3,}', ']]', s)
+
+def sanitize_obj(o):
+    if isinstance(o, str):
+        return norm_frac(o)
+    if isinstance(o, list):
+        return [sanitize_obj(x) for x in o]
+    if isinstance(o, dict):
+        return {k: sanitize_obj(v) for k, v in o.items()}
+    return o
 
 # ---------------- Auth routes ----------------
 @api_router.post("/auth/register")
@@ -411,6 +426,7 @@ STUDY MATERIAL:
         raw = await llm_generate(system, prompt, file_contents=file_contents)
         parsed = parse_json_block(raw)
         questions = parsed.get("questions", parsed) if isinstance(parsed, dict) else parsed
+        questions = sanitize_obj(questions)
     except Exception as e:
         logger.error(f"quiz gen failed: {e}")
         raise HTTPException(status_code=500, detail="AI quiz generation failed. Please try again.")
@@ -525,6 +541,7 @@ async def chat_with_docs(course_id: str, data: ChatInput, user: dict = Depends(g
         logger.error(f"chat failed: {e}")
         raise HTTPException(status_code=500, detail="AI chat failed. Please try again.")
     await db.chat_messages.insert_one({"session_id": session_id, "user_id": user["id"], "course_id": course_id, "role": "user", "content": data.message, "created_at": now_iso()})
+    answer = norm_frac(answer)
     await db.chat_messages.insert_one({"session_id": session_id, "user_id": user["id"], "course_id": course_id, "role": "assistant", "content": answer, "created_at": now_iso()})
     return {"session_id": session_id, "answer": answer}
 
@@ -612,7 +629,7 @@ Return ONLY JSON:
         raise HTTPException(status_code=500, detail="AI walkthrough generation failed. Please try again.")
     doc = {"id": str(uuid.uuid4()), "user_id": user["id"], "course_id": course_id,
            "title": data.title or parsed.get("title") or "Interactive Walkthrough",
-           "intro": parsed.get("intro", ""), "steps": parsed.get("steps", []),
+           "intro": norm_frac(parsed.get("intro", "")), "steps": sanitize_obj(parsed.get("steps", [])),
            "document_ids": data.document_ids, "progress": 0, "created_at": now_iso()}
     await db.walkthroughs.insert_one(doc)
     doc.pop("_id", None)
@@ -669,7 +686,7 @@ Return the study guide as MARKDOWN text only (no JSON, no code fences)."""
         raise HTTPException(status_code=500, detail="AI study guide generation failed. Please try again.")
     doc = {"id": str(uuid.uuid4()), "user_id": user["id"], "course_id": course_id,
            "title": data.title or f"{course['name']} Study Guide",
-           "content": content, "document_ids": data.document_ids,
+           "content": norm_frac(content), "document_ids": data.document_ids,
            "checklist_state": {}, "created_at": now_iso()}
     await db.study_guides.insert_one(doc)
     doc.pop("_id", None)
@@ -716,6 +733,7 @@ Return ONLY JSON: {{"terms": [{{"term": "Term", "definition": "clear definition"
         raw = await llm_generate(system, prompt, file_contents=files)
         parsed = parse_json_block(raw)
         terms = parsed.get("terms", parsed) if isinstance(parsed, dict) else parsed
+        terms = sanitize_obj(terms)
         terms = sorted(terms, key=lambda t: (t.get("term", "").lower()))
     except Exception as e:
         logger.error(f"key terms failed: {e}")

@@ -49,20 +49,28 @@ function buildComponents(checkbox) {
   return c;
 }
 
+function cleanStray(str) {
+  // Remove any leftover/malformed token fragments so raw brackets never leak into the DOM.
+  return str
+    .replace(/\[\[\s*(?:frac|center)\s*:?/gi, "")
+    .replace(/\]\]/g, "");
+}
+
 function renderTokens(text, checkbox, keyBase) {
+  text = String(text).replace(/\]{3,}/g, "]]"); // collapse malformed extra closers
   const tokenRe = /\[\[frac:([^|\]]*)\|([^\]]*)\]\]|\[\[center:([\s\S]*?)\]\]/g;
   const out = [];
   let last = 0, m, k = 0;
   const comps = buildComponents(checkbox);
   const pushMd = (str) => {
-    if (str && str.trim()) {
-      out.push(<ReactMarkdown key={`${keyBase}-md-${k++}`} remarkPlugins={[remarkGfm]} components={comps}>{str}</ReactMarkdown>);
+    const cleaned = cleanStray(str);
+    if (cleaned && cleaned.trim()) {
+      out.push(<ReactMarkdown key={`${keyBase}-md-${k++}`} remarkPlugins={[remarkGfm]} components={comps}>{cleaned}</ReactMarkdown>);
     }
   };
   while ((m = tokenRe.exec(text)) !== null) {
     if (m.index > last) pushMd(text.slice(last, m.index));
     if (m[3] !== undefined) {
-      // center: render inner fractions/text without deeper markdown blocks
       out.push(<div key={`${keyBase}-c-${k++}`} className="text-center my-3 text-lg text-white">{renderCenter(m[3])}</div>);
     } else {
       out.push(<Fraction key={`${keyBase}-f-${k++}`} num={m[1]} den={m[2]} />);
@@ -78,11 +86,11 @@ function renderCenter(text) {
   const out = [];
   let last = 0, m, k = 0;
   while ((m = fracRe.exec(text)) !== null) {
-    if (m.index > last) out.push(<span key={`ct-${k++}`}>{text.slice(last, m.index)}</span>);
+    if (m.index > last) out.push(<span key={`ct-${k++}`}>{cleanStray(text.slice(last, m.index))}</span>);
     out.push(<Fraction key={`cf-${k++}`} num={m[1]} den={m[2]} />);
     last = fracRe.lastIndex;
   }
-  if (last < text.length) out.push(<span key={`ct-${k++}`}>{text.slice(last)}</span>);
+  if (last < text.length) out.push(<span key={`ct-${k++}`}>{cleanStray(text.slice(last))}</span>);
   return out;
 }
 
