@@ -18,7 +18,20 @@ AI-powered study & productivity web app to help students get straight A's: uploa
 ## User Persona
 College/school students studying for exams who want organized notes, AI practice, and structured study plans.
 
-## Implemented (2026-08-09)
+## Implemented (updated)
+- JWT auth, course folders (create + **rename/archive/delete via card kebab menu**, Active/Archived tabs).
+- Documents: multi-file upload to cloud storage, **multimodal AI scan (words + formulas + pictures)**, **AI-suggested document names on upload**, list, **original-file preview (PDF inline / image / open-original + text)**, secure download (cookie auth), soft-delete.
+- AI quizzes: MCQ/flashcards/short-answer/fill-blank, 1–50 questions, **formula + theory mix**, explanations + document source refs, subfolders, rename/move, delete, immediate feedback, flashcard self-marking.
+- **Interactive Walkthrough**: comprehensive step-by-step AI lecture (concept/example/real-world/quick-check), per-step source refs, resume progress, animated player.
+- **Study Guide**: detailed AI markdown guide ending with a fillable "Quiz Revision Checklist" (persisted).
+- **Key Terms**: thorough term extraction, alphabetical, term+definition+source.
+- **Clean formatting everywhere**: RichText renderer (markdown + Unicode math + stacked [[frac]] fractions), no raw $/**/###; defensive sanitizer for malformed AI fraction tokens (frontend + backend).
+- AI document chat (rendered rich text), AI study plans, dashboard stats/weak-areas/reminders.
+
+## Testing
+- iteration_1: 20/20 backend + frontend 100%. iteration_2: 32/32 backend; found+fixed frac-token formatting bug. iteration_3: formatting fix confirmed + course rename/archive/delete 100%.
+
+## Original Implemented block below (kept for history)
 - JWT auth (register/login/logout/me), admin seed (admin@studyace.app/admin123).
 - Course folders: create (color/description), list with counts, delete (cascades).
 - Documents: multi-file upload to cloud storage, text scan/extract, list, preview text, secure download, soft-delete.
