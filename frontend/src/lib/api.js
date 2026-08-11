@@ -12,11 +12,20 @@ const api = axios.create({
   withCredentials: true,
 });
 
+// Add a request interceptor to log the full URL being called (helps with debugging)
+api.interceptors.request.use((config) => {
+  console.log(`[API] ${config.method.toUpperCase()} ${config.baseURL}${config.url}`);
+  return config;
+});
+
 export function formatApiErrorDetail(detail) {
   if (detail == null) return "Something went wrong. Please try again.";
   if (typeof detail === "string") return detail;
   if (Array.isArray(detail))
-    return detail.map((e) => (e && typeof e.msg === "string" ? e.msg : JSON.stringify(e))).filter(Boolean).join(" ");
+    return detail
+      .map((e) => (e && typeof e.msg === "string" ? e.msg : JSON.stringify(e)))
+      .filter(Boolean)
+      .join(" ");
   if (detail && typeof detail.msg === "string") return detail.msg;
   return String(detail);
 }
