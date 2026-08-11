@@ -31,9 +31,10 @@ db = client[db_name]
 
 app = FastAPI()
 
-# ---------------- Custom Middleware for Preflight Robustness ----------------
+# Custom Middleware for Preflight Robustness
 ALLOWED_ORIGINS = {
     "https://study-ace-khaki.vercel.app",
+    "https://study-ace-khaki.vercel.app/",
     "http://localhost:3000",
     "http://localhost:5173",
     "http://127.0.0.1:3000",
@@ -51,14 +52,17 @@ async def custom_cors_preflight_middleware(request: Request, call_next):
         if origin in ALLOWED_ORIGINS or (origin and ".vercel.app" in origin):
             response.headers["Access-Control-Allow-Origin"] = origin
             response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = request.headers.get("access-control-request-headers", "*")
+            return response
         elif origin:
             response.headers["Access-Control-Allow-Origin"] = origin
             response.headers["Access-Control-Allow-Credentials"] = "true"
-            
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = request.headers.get("access-control-request-headers", "*")
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = request.headers.get("access-control-request-headers", "*")
+            return response
         return response
-
+    
     response = await call_next(request)
     return response
 
@@ -67,6 +71,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://study-ace-khaki.vercel.app",
+        "https://study-ace-khaki.vercel.app/",
         "http://localhost:3000",
         "http://localhost:5173",
         "http://127.0.0.1:3000",
@@ -85,9 +90,9 @@ JWT_ALGORITHM = "HS256"
 EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
 APP_NAME = "studyace"
 
-# ---------------- Object storage ----------------
+# Object storage
 STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
-STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
+STORAGE_URL = STORAGE_BASE.strip("/") + "/objstore/api/v1/storage"
 storage_key = None
 
 def init_storage(force: bool = False):
@@ -128,7 +133,7 @@ def get_object(path: str):
     resp.raise_for_status()
     return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
 
-# ---------------- Text extraction ----------------
+# Text extraction
 def extract_text(data: bytes, ext: str) -> str:
     ext = ext.lower()
     try:
@@ -155,7 +160,7 @@ def extract_text(data: bytes, ext: str) -> str:
         logger.error(f"extract_text failed: {e}")
     return ""
 
-# ---------------- Auth helpers ----------------
+# Auth helpers
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
@@ -166,7 +171,7 @@ def get_jwt_secret() -> str:
     return os.environ.get("JWT_SECRET", "fallback-secret-change-me")
 
 def create_access_token(user_id: str, email: str) -> str:
-    payload = {"sub": user_id, "email": email, "exp": datetime.now(timezone.utc) + timedelta(days=7), "type": "access"}
+    payload = {"sub": user_id, "email": email, "exp": datetime.now(timezone.UTC) + timedelta(days=7), "type": "access"}
     return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 async def get_current_user(request: Request) -> dict:
@@ -194,7 +199,7 @@ async def get_current_user(request: Request) -> dict:
 def set_auth_cookie(response: Response, token: str):
     response.set_cookie(key="access_token", value=token, httponly=True, secure=True, samesite="none", max_age=604800, path="/")
 
-# ---------------- Models ----------------
+# Models
 class RegisterInput(BaseModel):
     name: str
     email: EmailStr
@@ -217,7 +222,7 @@ class CourseUpdateInput(BaseModel):
 
 class QuizGenInput(BaseModel):
     document_ids: List[str]
-    quiz_type: str  # mcq, flashcards, short_answer, fill_blank
+    quiz_type: str
     num_questions: int = 10
     title: Optional[str] = None
     topics: Optional[str] = ""
@@ -247,16 +252,15 @@ class StudyPlanInput(BaseModel):
     syllabus: str = ""
 
 def now_iso():
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(timezone.UTC).isoformat()
 
-# ---------------- LLM ----------------
+# LLM
 FORMAT_RULES = """FORMATTING RULES (very important, follow exactly):
 - Write clean, readable prose in Markdown. Use ## for main headings, ### for sub-headings, and **bold** for key terms/labels. Use short paragraphs, bullet lists, and leave a blank line between sections. Maintain clear visual hierarchy.
 - NEVER use LaTeX, dollar signs ($), or backslash math commands (no \\frac, \\times, \\div, etc.). NEVER output raw #, ##, ### as literal text mid-sentence.
 - Use REAL Unicode math symbols: × (multiply), ÷ (divide), − (minus), ± ≤ ≥ ≠ ≈ √ ∑ ∫ ∆ π θ ° → ∞, and superscripts/subscripts like x², xⁿ, H₂O.
-- For a stacked fraction (numerator on top, denominator on bottom) write EXACTLY [[frac:NUMERATOR|DENOMINATOR]] — e.g. [[frac:a + b|2c]]. Write ONE well-formed token per fraction: never add extra brackets and never put text after the closing ]]. WRONG: [[frac:1|2]]mv²]]  →  RIGHT: [[frac:mv²|2]] (or ½mv²). WRONG: [[frac:∆s|∆t]]]]  →  RIGHT: [[frac:∆s|∆t]]. For simple values you may use ½, ¾. Put display equations centered on their own line using [[center:...]].
+- For a stacked fraction (numerator on top, denominator on bottom) write EXACTLY [[frac:NUMERATOR|DENOMINATOR]] — e.g. [[frac:a + b|2c]]. Write ONE well-formed token per fraction: never add extra brackets and never put text after the closing ]]. WRONG: [[frac:1|2]]mv²]] → RIGHT: [[frac:mv²|2]] (or ½mv²). WRONG: [[frac:∆s|∆t]]]] → RIGHT: [[frac:∆s|∆t]]. For simple values you may use ½, ¾. Put display equations centered on their own line using [[center:...]].
 - Keep the screen uncluttered and the text naturally formatted, like a great textbook."""
-
 ATTACH_EXTS = ("pdf", "png", "jpg", "jpeg", "webp", "gif")
 
 async def fetch_doc_materials(doc_ids, user_id, attach_files=True, per_text=45000, max_files=6, max_bytes=18 * 1024 * 1024):
@@ -316,16 +320,15 @@ def sanitize_obj(o):
         return {k: sanitize_obj(v) for k, v in o.items()}
     return o
 
-# ---------------- Auth routes ----------------
+# -------------------- Auth routes --------------------
 @api_router.post("/auth/register")
 async def register(data: RegisterInput, response: Response):
     email = data.email.lower()
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="Email already registered")
-    doc = {"name": data.name, "email": email, "password_hash": hash_password(data.password), "role": "user", "created_at": now_iso(),
-           "prefs": {"daily_hours": 2}}
+    doc = {"name": data.name, "email": email, "password_hash": hash_password(data.password), "role": "user", "created_at": now_iso(), "prefs": {"daily_hours": 2}}
     res = await db.users.insert_one(doc)
-    uid = str(res.inserted_id)
+    uid = str(res.insert_id)
     set_auth_cookie(response, create_access_token(uid, email))
     return {"id": uid, "name": data.name, "email": email, "role": "user"}
 
@@ -348,11 +351,10 @@ async def logout(response: Response, user: dict = Depends(get_current_user)):
 async def me(user: dict = Depends(get_current_user)):
     return user
 
-# ---------------- Course routes ----------------
+# -------------------- Course routes --------------------
 @api_router.post("/courses")
 async def create_course(data: CourseInput, user: dict = Depends(get_current_user)):
-    doc = {"id": str(uuid.uuid4()), "user_id": user["id"], "name": data.name, "color": data.color,
-           "description": data.description, "archived": False, "created_at": now_iso()}
+    doc = {"id": str(uuid.uuid4()), "user_id": user["id"], "name": data.name, "color": data.color, "description": data.description, "archived": False, "created_at": now_iso()}
     await db.courses.insert_one(doc)
     doc.pop("_id", None)
     return doc
@@ -391,7 +393,7 @@ async def delete_course(course_id: str, user: dict = Depends(get_current_user)):
     await db.folders.delete_many({"course_id": course_id})
     return {"ok": True}
 
-# ---------------- Document routes ----------------
+# -------------------- Document routes --------------------
 async def suggest_doc_name(text, filename, ext, data=None, ctype=None):
     try:
         files = []
@@ -399,7 +401,7 @@ async def suggest_doc_name(text, filename, ext, data=None, ctype=None):
             from emergentintegrations.llm.chat import FileContent
             import base64 as _b64
             files = [FileContent(ctype or "application/pdf", _b64.b64encode(data).decode("utf-8"))]
-        prompt = f"Suggest a concise, descriptive title (3 to 8 words, Title Case, NO file extension, no quotes) for this study document based on its actual content. Return ONLY the title.\n\nOriginal filename: {filename}\nContent excerpt:\n{(text or '')[:4000]}"
+        prompt = f"Suggest a concise, descriptive title (3 to 8 words, Title Case, NO file extension, no quotes) for this study document based on its actual content. Return ONLY the title.\n\nOriginal filename: {filename}\nContent excerpt:\n{text or ''}[:4000]"
         name = await llm_generate("You name study documents concisely and accurately.", prompt, file_contents=files)
         name = (name or "").strip().strip('"').split("\n")[0][:80]
         return name or filename
@@ -418,20 +420,9 @@ async def upload_document(course_id: str, file: UploadFile = File(...), user: di
     result = put_object(path, data, file.content_type or "application/octet-stream")
     text = extract_text(data, ext)
     suggested = await suggest_doc_name(text, file.filename, ext, data, file.content_type)
-    doc = {"id": str(uuid.uuid4()), "user_id": user["id"], "course_id": course_id,
-           "storage_path": result["path"], "original_filename": file.filename,
-           "name": suggested, "suggested_name": suggested,
-           "content_type": file.content_type, "ext": ext, "size": result.get("size", len(data)),
-           "text": text[:200000], "is_deleted": False, "created_at": now_iso()}
+    doc = {"id": str(uuid.uuid4()), "user_id": user["id"], "course_id": course_id, "storage_path": result["path"], "original_filename": file.filename, "name": suggested, "suggested_name": suggested, "content_type": file.content_type, "ext": ext, "size": result.get("size", len(data)), "text": text[:200000], "is_deleted": False, "created_at": now_iso()}
     await db.documents.insert_one(doc)
-    return {k: v for k, v in doc.items() if k not in ("_id", "text")}
-
-@api_router.patch("/documents/{doc_id}")
-async def rename_document(doc_id: str, data: FolderInput, user: dict = Depends(get_current_user)):
-    res = await db.documents.update_one({"id": doc_id, "user_id": user["id"]}, {"$set": {"name": data.name}})
-    if res.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Document not found")
-    return {"ok": True}
+    return {k: v for k, v in doc.items() if k not in {"_id", "text"}}
 
 @api_router.get("/courses/{course_id}/documents")
 async def list_documents(course_id: str, user: dict = Depends(get_current_user)):
@@ -463,20 +454,19 @@ async def download_document(doc_id: str, request: Request, authorization: str = 
     if not d:
         raise HTTPException(status_code=404, detail="Document not found")
     content, ctype = get_object(d["storage_path"])
-    return StarletteResponse(content=content, media_type=d.get("content_type") or ctype,
-                             headers={"Content-Disposition": f'inline; filename="{d["original_filename"]}"'})
+    return StarletteResponse(content=content, media_type=d.get("content_type") or ctype, headers={"Content-Disposition": f'inline; filename="{d["original_filename"]}"'})
 
 @api_router.delete("/documents/{doc_id}")
 async def delete_document(doc_id: str, user: dict = Depends(get_current_user)):
     await db.documents.update_one({"id": doc_id, "user_id": user["id"]}, {"$set": {"is_deleted": True}})
     return {"ok": True}
 
-# ---------------- Quiz routes ----------------
+# -------------------- Quizzes --------------------
 QUIZ_INSTRUCTIONS = {
-    "mcq": 'Each question object: {"question": str, "options": [4 strings], "answer": str (must exactly match one option), "explanation": str, "source": str (short quote or section reference from the material)}',
-    "flashcards": 'Each question object: {"question": str (front/term), "answer": str (back/definition), "explanation": str, "source": str}. Leave options as empty list.',
-    "short_answer": 'Each question object: {"question": str, "answer": str (concise ideal answer), "explanation": str, "source": str}. Leave options as empty list.',
-    "fill_blank": 'Each question object: {"question": str (sentence with a ____ blank), "answer": str (the word/phrase for the blank), "explanation": str, "source": str}. Leave options as empty list.',
+    "mcq": "Each question object: {\"question\": str, \"options\": [4 strings], \"answer\": str (must exactly match one option), \"explanation\": str, \"source\": str (short quote or section reference from the material)}",
+    "flashcards": "Each question object: {\"question\": str (front/term), \"answer\": str (back/definition), \"explanation\": str, \"source\": str). Leave options as empty list.",
+    "short_answer": "Each question object: {\"question\": str, \"answer\": str (concise ideal answer), \"explanation\": str, \"source\": str). Leave options as empty list.",
+    "fill_blank": "Each question object: {\"question\": str (sentence with a __ blank), \"answer\": str (the word/phrase for the blank), \"explanation\": str, \"source\": str). Leave options as empty list.",
 }
 
 @api_router.post("/courses/{course_id}/quizzes/generate")
@@ -497,7 +487,6 @@ IMPORTANT MIX: Do NOT make every question pure theory. When the material contain
 MATH FORMATTING inside any string: use real Unicode symbols (× ÷ − ± ≤ ≥ ≠ √ π θ ° x²), NEVER LaTeX, $ or backslash commands. For stacked fractions write [[frac:numerator|denominator]].
 For every question, 'source' MUST reference the specific document name and page/slide/section the answer is drawn from.
 Respond ONLY with JSON: {{"questions": [ ...question objects... ]}}
-
 STUDY MATERIAL:
 {material}"""
     try:
@@ -508,11 +497,7 @@ STUDY MATERIAL:
     except Exception as e:
         logger.error(f"quiz gen failed: {e}")
         raise HTTPException(status_code=500, detail="AI quiz generation failed. Please try again.")
-    quiz = {"id": str(uuid.uuid4()), "user_id": user["id"], "course_id": course_id,
-            "title": data.title or f"{data.quiz_type.replace('_',' ').title()} Quiz",
-            "quiz_type": data.quiz_type, "num_questions": len(questions),
-            "document_ids": data.document_ids, "topics": data.topics, "folder_id": data.folder_id,
-            "questions": questions, "attempts": [], "best_score": None, "created_at": now_iso()}
+    quiz = {"id": str(uuid.uuid4()), "user_id": user["id"], "course_id": course_id, "title": data.title or f"{data.quiz_type.replace('_',' ').title()} Quiz", "quiz_type": data.quiz_type, "num_questions": len(questions), "document_ids": data.document_ids, "topics": data.topics, "folder_id": data.folder_id, "questions": questions, "attempts": [], "best_score": None, "created_at": now_iso()}
     await db.quizzes.insert_one(quiz)
     quiz.pop("_id", None)
     return quiz
@@ -544,7 +529,7 @@ async def delete_quiz(quiz_id: str, user: dict = Depends(get_current_user)):
     await db.quizzes.delete_one({"id": quiz_id, "user_id": user["id"]})
     return {"ok": True}
 
-# ---------------- Folder (subfolder) routes ----------------
+# -------------------- Folder routes --------------------
 @api_router.post("/courses/{course_id}/folders")
 async def create_folder(course_id: str, data: FolderInput, user: dict = Depends(get_current_user)):
     course = await db.courses.find_one({"id": course_id, "user_id": user["id"]})
@@ -569,7 +554,7 @@ async def delete_folder(folder_id: str, user: dict = Depends(get_current_user)):
     return {"ok": True}
 
 def normalize(s: str) -> str:
-    return "".join(ch.lower() for ch in (s or "") if ch.isalnum())
+    return ''.join(ch.lower() for ch in (s or "") if ch.isalnum())
 
 @api_router.post("/quizzes/{quiz_id}/attempt")
 async def submit_attempt(quiz_id: str, data: QuizAttemptInput, user: dict = Depends(get_current_user)):
@@ -589,18 +574,15 @@ async def submit_attempt(quiz_id: str, data: QuizAttemptInput, user: dict = Depe
             is_correct = bool(na) and (na == ng or (len(ng) > 3 and (na in ng or ng in na)))
         if is_correct:
             correct += 1
-        results.append({"question": ques.get("question"), "user_answer": user_ans, "correct_answer": gold,
-                        "is_correct": is_correct, "explanation": ques.get("explanation", ""),
-                        "source": ques.get("source", ""), "options": ques.get("options", [])})
+        results.append({"question": ques.get("question"), "user_answer": user_ans, "correct_answer": gold, "is_correct": is_correct, "explanation": ques.get("explanation", ""), "source": ques.get("source", ""), "options": ques.get("options", [])})
     score = round(100 * correct / len(questions)) if questions else 0
-    attempt = {"score": score, "correct": correct, "total": len(questions), "at": now_iso(),
-               "weak": [r["question"] for r in results if not r["is_correct"]]}
+    attempt = {"score": score, "correct": correct, "total": len(questions), "at": now_iso(), "weak": [r["question"] for r in results if not r["is_correct"]]}
     best = q.get("best_score")
     new_best = score if best is None else max(best, score)
     await db.quizzes.update_one({"id": quiz_id}, {"$push": {"attempts": attempt}, "$set": {"best_score": new_best}})
     return {"score": score, "correct": correct, "total": len(questions), "results": results}
 
-# ---------------- Chat routes ----------------
+# -------------------- Chat routes --------------------
 @api_router.post("/courses/{course_id}/chat")
 async def chat_with_docs(course_id: str, data: ChatInput, user: dict = Depends(get_current_user)):
     session_id = data.session_id or str(uuid.uuid4())
@@ -608,7 +590,7 @@ async def chat_with_docs(course_id: str, data: ChatInput, user: dict = Depends(g
     if data.document_ids:
         docs = await db.documents.find({"id": {"$in": data.document_ids}, "user_id": user["id"]}, {"_id": 0}).to_list(100)
         for d in docs:
-            context += f"\n\n=== {d['original_filename']} ===\n{d.get('text','')[:30000]}"
+            context += f"\n\n== {d['original_filename']} ==\n{d.get('text', '')[:30000]}"
     history = await db.chat_messages.find({"session_id": session_id, "user_id": user["id"]}, {"_id": 0}).sort("created_at", 1).to_list(50)
     hist_text = "\n".join(f"{m['role']}: {m['content']}" for m in history[-10:])
     system = "You are StudyAce, a friendly, encouraging AI tutor. Answer using the provided study material. Cite the document name when referencing facts. If the answer isn't in the material, say so and give your best general guidance. Keep answers focused and well-structured.\n\n" + FORMAT_RULES
@@ -618,89 +600,4 @@ async def chat_with_docs(course_id: str, data: ChatInput, user: dict = Depends(g
     except Exception as e:
         logger.error(f"chat failed: {e}")
         raise HTTPException(status_code=500, detail="AI chat failed. Please try again.")
-    await db.chat_messages.insert_one({"session_id": session_id, "user_id": user["id"], "course_id": course_id, "role": "user", "content": data.message, "created_at": now_iso()})
-    answer = norm_frac(answer)
-    await db.chat_messages.insert_one({"session_id": session_id, "user_id": user["id"], "course_id": course_id, "role": "assistant", "content": answer, "created_at": now_iso()})
-    return {"session_id": session_id, "answer": answer}
-
-@api_router.get("/courses/{course_id}/chat/{session_id}")
-async def get_chat_history(course_id: str, session_id: str, user: dict = Depends(get_current_user)):
-    msgs = await db.chat_messages.find({"session_id": session_id, "user_id": user["id"]}, {"_id": 0}).sort("created_at", 1).to_list(200)
-    return msgs
-
-# ---------------- Study plan ----------------
-@api_router.post("/courses/{course_id}/study-plan")
-async def create_study_plan(course_id: str, data: StudyPlanInput, user: dict = Depends(get_current_user)):
-    course = await db.courses.find_one({"id": course_id, "user_id": user["id"]})
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
-    system = "You are an expert academic study planner. You respond ONLY with valid JSON, no markdown."
-    prompt = f"""Create a detailed day-by-day study plan for a student.
-Course: {course['name']}
-Exam: {data.exam_name} on {data.exam_date}
-Available study hours per day: {data.daily_hours}
-Weekly timetable / busy times: {data.timetable or 'not provided'}
-Syllabus / topics to cover: {data.syllabus or data.topics or 'not provided'}
-Today's date: {datetime.now(timezone.utc).date().isoformat()}
-
-Distribute topics sensibly across days leading up to the exam, leaving the last day for revision. Respect busy times.
-Respond ONLY with JSON:
-{{"overview": "1-2 sentence summary", "days": [{{"date": "YYYY-MM-DD", "focus": "topic focus", "tasks": ["task1","task2"], "hours": number}}], "tips": ["tip1","tip2"]}}"""
-    try:
-        raw = await llm_generate(system, prompt)
-        plan = parse_json_block(raw)
-    except Exception as e:
-        logger.error(f"study plan failed: {e}")
-        raise HTTPException(status_code=500, detail="AI study plan generation failed. Please try again.")
-    doc = {"id": str(uuid.uuid4()), "user_id": user["id"], "course_id": course_id,
-           "exam_name": data.exam_name, "exam_date": data.exam_date, "daily_hours": data.daily_hours,
-           "plan": plan, "created_at": now_iso()}
-    await db.study_plans.insert_one(doc)
-    doc.pop("_id", None)
-    return doc
-
-@api_router.get("/courses/{course_id}/study-plans")
-async def list_study_plans(course_id: str, user: dict = Depends(get_current_user)):
-    plans = await db.study_plans.find({"course_id": course_id, "user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(100)
-    return plans
-
-@api_router.delete("/study-plans/{plan_id}")
-async def delete_plan(plan_id: str, user: dict = Depends(get_current_user)):
-    await db.study_plans.delete_one({"id": plan_id, "user_id": user["id"]})
-    return {"ok": True}
-
-@api_router.post("/courses/{course_id}/schedule-file")
-async def parse_schedule_file(course_id: str, kind: str = Form("syllabus"), file: UploadFile = File(...), user: dict = Depends(get_current_user)):
-    course = await db.courses.find_one({"id": course_id, "user_id": user["id"]})
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
-    ext = file.filename.split(".")[-1].lower() if "." in file.filename else "bin"
-    data = await file.read()
-    path = f"{APP_NAME}/uploads/{user['id']}/{uuid.uuid4()}.{ext}"
-    result = put_object(path, data, file.content_type or "application/octet-stream")
-    text = extract_text(data, ext)
-    files = []
-    if ext in ATTACH_EXTS:
-        try:
-            from emergentintegrations.llm.chat import FileContent
-            import base64 as _b64
-            files = [FileContent(file.content_type or "application/pdf", _b64.b64encode(data).decode("utf-8"))]
-        except Exception as e:
-            logger.error(f"Schedule file attachment failed: {e}")
-            
-    system = "You are an expert academic organizer. Extract structured information from study schedules, timetables, or syllabi."
-    prompt = f"Extract all topics, key dates, or timetable schedules from this uploaded {kind} file:\n\n{text[:100000]}"
-    try:
-        extracted = await llm_generate(system, prompt, file_contents=files)
-    except Exception as e:
-        logger.error(f"parse schedule file failed: {e}")
-        extracted = text[:2000]
-
-    return {"filename": file.filename, "extracted_text": extracted}
-
-# Include router and add health route
-app.include_router(api_router)
-
-@app.get("/health")
-def health_check():
-    return {"status": "ok"}
+    await db.chat_messages.insert_one({"session_id": session_id, "user_id": user["id"], "course_id": course_id, "role": "user", "content": data.message, "created_at": now_iso()
