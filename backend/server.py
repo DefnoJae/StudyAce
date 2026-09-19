@@ -328,7 +328,7 @@ async def register(data: RegisterInput, response: Response):
         raise HTTPException(status_code=400, detail="Email already registered")
     doc = {"name": data.name, "email": email, "password_hash": hash_password(data.password), "role": "user", "created_at": now_iso(), "prefs": {"daily_hours": 2}}
     res = await db.users.insert_one(doc)
-    uid = str(res.insert_id)
+    uid = str(res.inserted_id)
     set_auth_cookie(response, create_access_token(uid, email))
     return {"id": uid, "name": data.name, "email": email, "role": "user"}
 
