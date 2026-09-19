@@ -1,7 +1,18 @@
 import axios from "axios";
 
-// Clean any trailing slash from the environment variable
-const rawBackendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:8000";
+// Production builds must receive the deployed backend URL from Vercel.
+// Local development can continue to use the backend on port 8000.
+const configuredBackendUrl = process.env.REACT_APP_BACKEND_URL?.trim();
+const rawBackendUrl =
+  configuredBackendUrl ||
+  (process.env.NODE_ENV === "development" ? "http://localhost:8000" : "");
+
+if (!rawBackendUrl || rawBackendUrl.includes("your-render-backend-url")) {
+  throw new Error(
+    "REACT_APP_BACKEND_URL must be set to the deployed backend URL for production builds."
+  );
+}
+
 const BACKEND_URL = rawBackendUrl.replace(/\/+$/, "");
 
 // Standardize base URL so endpoints only need /auth/register, /auth/me, etc.
