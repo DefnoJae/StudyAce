@@ -17,7 +17,6 @@ import requests
 from bson import ObjectId
 from fastapi import FastAPI, APIRouter, Request, Response, HTTPException, Depends, UploadFile, File, Form, Header, Query
 from starlette.middleware.cors import CORSMiddleware
-from starlette.responses import Response as StarletteResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, EmailStr, Field
 
@@ -31,57 +30,21 @@ db = client[db_name]
 
 app = FastAPI()
 
-# Custom Middleware for Preflight Robustness
-ALLOWED_ORIGINS = {
+# Explicit CORS policy for the production frontend and local development.
+ALLOWED_ORIGINS = [
     "https://study-ace-khaki.vercel.app",
-    "https://study-ace-khaki.vercel.app/",
     "http://localhost:3000",
     "http://localhost:5173",
     "http://127.0.0.1:3000",
     "http://127.0.0.1:5173",
-}
+]
 
-@app.middleware("http")
-async def custom_cors_preflight_middleware(request: Request, call_next):
-    # Handle preflight OPTIONS requests before Starlette's CORS middleware can reject them
-    if request.method == "OPTIONS":
-        origin = request.headers.get("origin")
-        response = StarletteResponse(status_code=200)
-        
-        # Check explicit origins or Vercel preview URLs
-        if origin in ALLOWED_ORIGINS or (origin and ".vercel.app" in origin):
-            response.headers["Access-Control-Allow-Origin"] = origin
-            response.headers["Access-Control-Allow-Credentials"] = "true"
-            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-            response.headers["Access-Control-Allow-Headers"] = request.headers.get("access-control-request-headers", "*")
-            return response
-        elif origin:
-            response.headers["Access-Control-Allow-Origin"] = origin
-            response.headers["Access-Control-Allow-Credentials"] = "true"
-            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-            response.headers["Access-Control-Allow-Headers"] = request.headers.get("access-control-request-headers", "*")
-            return response
-        return response
-    
-    response = await call_next(request)
-    return response
-
-# Standard CORS Middleware for normal requests
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://study-ace-khaki.vercel.app",
-        "https://study-ace-khaki.vercel.app/",
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:5173"
-    ],
-    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Accept", "Authorization", "Content-Type"],
 )
 
 api_router = APIRouter(prefix="/api")
