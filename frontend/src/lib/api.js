@@ -7,7 +7,7 @@ const rawBackendUrl =
   configuredBackendUrl ||
   (process.env.NODE_ENV === "development" ? "http://localhost:8000" : "");
 
-if (!rawBackendUrl || rawBackendUrl.includes("your-render-backend-url")) {
+if (!rawBackendUrl) {
   throw new Error(
     "REACT_APP_BACKEND_URL must be set to the deployed backend URL for production builds."
   );
